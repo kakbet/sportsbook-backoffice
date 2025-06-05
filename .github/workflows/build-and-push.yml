@@ -1,0 +1,449 @@
+name: Multi-Repository PHP Sportsbook Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: 'Version increment type'
+        required: false
+        default: 'patch'
+        type: choice
+        options:
+        - patch
+        - minor
+        - major
+      custom_version:
+        description: 'Custom version (optional)'
+        required: false
+        type: string
+      super_branch:
+        description: 'Super repository branch'
+        required: false
+        default: 'main'
+        type: string
+      pgf_branch:
+        description: 'PGF repository branch'
+        required: false
+        default: 'main'
+        type: string
+      pglib_branch:
+        description: 'PGLib repository branch'
+        required: false
+        default: 'main'
+        type: string
+      confirm_deploy:
+        description: 'Confirm deployment (Yes/No)'
+        required: true
+        default: 'No'
+        type: choice
+        options:
+        - 'Yes'
+        - 'No'
+
+env:
+  ECR_REGISTRY: 827604626727.dkr.ecr.eu-central-1.amazonaws.com
+  ECR_REPOSITORY: sb/sportsbook-backoffice
+  AWS_REGION: eu-central-1
+  VERSION_FILE: 'version.txt'
+  BASE_IMAGE: '827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm'
+
+jobs:
+  php-multi-build:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    
+    outputs:
+      version: ${{ steps.version.outputs.new_version }}
+      current_version: ${{ steps.version.outputs.current_version }}
+    
+    steps:
+    - name: Check Deployment Confirmation
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        if [ "${{ github.event.inputs.confirm_deploy }}" != "Yes" ]; then
+          echo "❌ Deployment cancelled by user"
+          echo "Please confirm deployment and ensure PR is approved"
+          exit 1
+        fi
+        echo "✅ Deployment confirmed"
+
+    - name: Checkout Main Orchestrator Repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+        path: main
+
+    - name: Checkout Super Repository (www)
+      uses: actions/checkout@v4
+      with:
+        repository: kakbet/Super
+        token: ${{ secrets.PAT_TOKEN }}
+        ref: ${{ github.event.inputs.super_branch || 'main' }}
+        path: www
+
+    - name: Checkout PGF Repository
+      uses: actions/checkout@v4
+      with:
+        repository: kakbet/PGF
+        token: ${{ secrets.PAT_TOKEN }}
+        ref: ${{ github.event.inputs.pgf_branch || 'main' }}
+        path: PGF
+
+    - name: Checkout PGLib Repository
+      uses: actions/checkout@v4
+      with:
+        repository: kakbet/PGLib
+        token: ${{ secrets.PAT_TOKEN }}
+        ref: ${{ github.event.inputs.pglib_branch || 'main' }}
+        path: PGLib
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_mysql, dom, filter, gd, json
+        tools: composer:v2
+
+    - name: Configure Git
+      run: |
+        cd main
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Get Current Version and Create New Version
+      id: version
+      working-directory: main
+      run: |
+        # Version dosyasından veya git tag'den versiyon al
+        if [ -f "$VERSION_FILE" ]; then
+          CURRENT_VERSION=$(cat $VERSION_FILE | tr -d '\n\r')
+        elif git describe --tags --abbrev=0 2>/dev/null; then
+          CURRENT_VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
+        else
+          CURRENT_VERSION="4.2.1"
+        fi
+        
+        echo "Current version: $CURRENT_VERSION"
+        
+        # Custom version varsa onu kullan
+        if [ -n "${{ github.event.inputs.custom_version }}" ]; then
+          NEW_VERSION="${{ github.event.inputs.custom_version }}"
+          echo "Using custom version: $NEW_VERSION"
+        else
+          # Versiyon parçalarını ayır (4.2.1 formatında)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          # Sayı kontrol
+          if ! [[ "$MAJOR" =~ ^[0-9]+$ ]] || ! [[ "$MINOR" =~ ^[0-9]+$ ]] || ! [[ "$PATCH" =~ ^[0-9]+$ ]]; then
+            echo "Invalid version format, resetting to 4.2.1"
+            MAJOR=4; MINOR=2; PATCH=1
+          fi
+          
+          # Version type'a göre artır
+          VERSION_TYPE="${{ github.event.inputs.version_type || 'patch' }}"
+          
+          case $VERSION_TYPE in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+          
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+        fi
+        
+        # Version format kontrolü
+        if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "Invalid version format: $NEW_VERSION, using fallback"
+          NEW_VERSION="4.2.1"
+        fi
+        
+        echo "Final new version: $NEW_VERSION"
+        
+        # Version dosyasını güncelle
+        echo "$NEW_VERSION" > $VERSION_FILE
+        
+        # Git tag oluştur
+        if git tag "v${NEW_VERSION}"; then
+          echo "Tag v${NEW_VERSION} created successfully"
+          if git push origin "v${NEW_VERSION}"; then
+            echo "Tag v${NEW_VERSION} pushed successfully"
+          else
+            echo "Failed to push tag, but continuing..."
+          fi
+        fi
+        
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+    - name: Prepare Project Structure
+      run: |
+        echo "Setting up project structure..."
+        
+        # Ana dizin yapısını oluştur
+        mkdir -p main/build
+        
+        # Projeleri ana dizine kopyala
+        cp -r www main/build/www
+        cp -r PGF main/build/PGF
+        cp -r PGLib main/build/PGLib
+        
+        echo "Project structure ready:"
+        ls -la main/build/
+
+    - name: Install Composer Dependencies
+      working-directory: main/build/PGF
+      run: |
+        echo "Installing PGF dependencies..."
+        composer install --no-dev --optimize-autoloader --no-interaction
+        
+        echo "Composer install completed"
+        ls -la vendor/ || echo "No vendor directory created"
+
+    - name: Clean Git Directories
+      working-directory: main/build
+      run: |
+        echo "Cleaning .git directories..."
+        rm -rf PGF/.git PGLib/.git www/.git
+        
+        # Sessions dizini oluştur
+        mkdir -p www/.sessions
+        
+        echo "Cleanup completed"
+
+    - name: Create Dockerfile
+      working-directory: main
+      run: |
+        cat > Dockerfile << 'EOF'
+        # Multi-stage build for PHP Sportsbook
+        FROM ${{ env.BASE_IMAGE }}:latest AS builder
+        
+        WORKDIR /home/www-data
+        
+        # Install git for any additional operations
+        RUN set -eux && apk add --no-cache git
+        
+        # Create lib directory
+        RUN mkdir -p /home/www-data/lib
+        
+        # Copy projects
+        COPY build/www /home/www-data/www
+        COPY build/PGLib /home/www-data/lib/PGLib
+        COPY build/PGF /home/www-data/lib/PGF
+        
+        # Ensure composer dependencies are installed
+        RUN if [ -f "/home/www-data/lib/PGF/composer.json" ] && [ ! -d "/home/www-data/lib/PGF/vendor" ]; then \
+              composer install --working-dir=/home/www-data/lib/PGF --no-dev --optimize-autoloader; \
+            fi
+        
+        # Create sessions directory
+        RUN mkdir -p www/.sessions
+        
+        # Configure PHP-FPM status and ping
+        RUN echo 'pm.status_path = /status' >> /usr/local/etc/php-fpm.d/www.conf
+        RUN echo 'ping.path = /ping' >> /usr/local/etc/php-fpm.d/www.conf
+        
+        # Production stage
+        FROM ${{ env.BASE_IMAGE }}:latest AS production
+        
+        WORKDIR /home/www-data/www
+        
+        # Copy everything from builder
+        COPY --from=builder /home/www-data /home/www-data
+        
+        # Set proper ownership
+        RUN chown www-data:www-data -R /home/www-data/
+        
+        # Add version label
+        LABEL version="${{ steps.version.outputs.new_version }}"
+        LABEL description="Combined PHP Sportsbook Backoffice Application"
+        
+        EXPOSE 9000
+        
+        CMD ["php-fpm"]
+        EOF
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build and Push Docker Image
+      working-directory: main
+      run: |
+        echo "Building Docker image..."
+        
+        VERSION="${{ steps.version.outputs.new_version }}"
+        
+        # Build image
+        docker build \
+          -t $ECR_REGISTRY/$ECR_REPOSITORY:${VERSION} \
+          -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+          --build-arg VERSION=${VERSION} \
+          .
+        
+        echo "Pushing to ECR..."
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:${VERSION}
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        
+        echo "Docker build and push completed"
+
+    - name: Archive Version File
+      uses: actions/upload-artifact@v4
+      with:
+        name: version-file-${{ steps.version.outputs.new_version }}
+        path: main/${{ env.VERSION_FILE }}
+        retention-days: 30
+
+    - name: Create GitHub Release
+      if: github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.version.outputs.new_version }}
+        name: PHP Sportsbook v${{ steps.version.outputs.new_version }}
+        body: |
+          ## 🚀 PHP Sportsbook Combined Release v${{ steps.version.outputs.new_version }}
+          
+          ### 📦 Included Projects
+          - **Super (www)**: Main application (`${{ github.event.inputs.super_branch || 'main' }}` branch)
+          - **PGF**: Framework (`${{ github.event.inputs.pgf_branch || 'main' }}` branch)  
+          - **PGLib**: Library (`${{ github.event.inputs.pglib_branch || 'main' }}` branch)
+          
+          ### 🐳 Docker Image
+          ```bash
+          docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.new_version }}
+          ```
+          
+          ### 📋 Details
+          - **Previous Version**: ${{ steps.version.outputs.current_version }}
+          - **Build Date**: ${{ github.event.head_commit.timestamp }}
+          - **Triggered by**: ${{ github.actor }}
+          - **Commit**: ${{ github.sha }}
+        draft: false
+        prerelease: false
+        files: main/${{ env.VERSION_FILE }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Send Slack Notification
+      if: always()
+      uses: slackapi/slack-github-action@v1.26.0
+      with:
+        channel-id: 'C1234567890'  # Kanal ID'nizi buraya yazın
+        payload: |
+          {
+            "text": "${{ job.status == 'success' && '🐘 PHP Build Successful! 🚀' || job.status == 'failure' && '💥 PHP Build Failed! ❌' || '⚠️ PHP Build Warning! ⚠️' }}",
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "${{ job.status == 'success' && '🐘 PHP Sportsbook Build Successful! 🚀' || job.status == 'failure' && '💥 PHP Build Failed! ❌' || '⚠️ PHP Build Warning! ⚠️' }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*🏷️ Version: v${{ steps.version.outputs.new_version || 'N/A' }}*\n_Combined PHP Sportsbook Application Successfully Deployed!_"
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*📁 Project:*\nPHP Sportsbook Combined"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*📂 Repository:*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*🏷️ New Version:*\n`v${{ steps.version.outputs.new_version || 'N/A' }}`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*🏷️ Previous Version:*\n`v${{ steps.version.outputs.current_version || 'N/A' }}`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*🐘 PHP Version:*\n`8.3`"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*👤 Triggered By:*\n${{ github.actor }}"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*📦 Included Projects:*\n• Super (www): `${{ github.event.inputs.super_branch || 'main' }}`\n• PGF: `${{ github.event.inputs.pgf_branch || 'main' }}`\n• PGLib: `${{ github.event.inputs.pglib_branch || 'main' }}`"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*🐳 Docker Image:*\n`${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.new_version }}`"
+                }
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "🏷️ View Release v${{ steps.version.outputs.new_version }}"
+                    },
+                    "url": "${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.new_version }}",
+                    "style": "primary"
+                  },
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "🔧 View Workflow"
+                    },
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                ]
+              }
+            ]
+          }
+      env:
+        SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: php-multi-build
+    if: always()
+    steps:
+    - name: Workflow Summary
+      run: |
+        echo "## 🐘 PHP Sportsbook Multi-Repository Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Combined Projects**: Super (www) + PGF + PGLib" >> $GITHUB_STEP_SUMMARY
+        echo "- **Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **PHP Version**: 8.3" >> $GITHUB_STEP_SUMMARY
+        echo "- **Previous Version**: ${{ needs.php-multi-build.outputs.current_version || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **New Version**: ${{ needs.php-multi-build.outputs.version || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: ${{ needs.php-multi-build.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Docker Image**: \`${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ needs.php-multi-build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Release**: [v${{ needs.php-multi-build.outputs.version }}](${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.php-multi-build.outputs.version }})" >> $GITHUB_STEP_SUMMARY
