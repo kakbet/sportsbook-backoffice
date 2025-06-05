@@ -341,7 +341,7 @@ jobs:
       if: always()
       uses: slackapi/slack-github-action@v1.26.0
       with:
-        channel-id: 'C1234567890'  # Kanal ID'nizi buraya yazın
+        channel-id: 'C090TV1RTKJ'
         payload: |
           {
             "text": "${{ job.status == 'success' && '🐘 PHP Build Successful! 🚀' || job.status == 'failure' && '💥 PHP Build Failed! ❌' || '⚠️ PHP Build Warning! ⚠️' }}",
