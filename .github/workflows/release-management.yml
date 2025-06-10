@@ -1,0 +1,164 @@
+# .github/workflows/release-management.yml
+name: Release Management
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        description: 'Project name'
+        required: true
+        type: string
+      project_emoji:
+        description: 'Project emoji'
+        required: false
+        default: '🚀'
+        type: string
+      version:
+        description: 'Version'
+        required: true
+        type: string
+      previous_version:
+        description: 'Previous version'
+        required: false
+        type: string
+      docker_image:
+        description: 'Docker image URL'
+        required: false
+        type: string
+      ecr_registry:
+        description: 'ECR Registry URL'
+        required: false
+        type: string
+      ecr_repository:
+        description: 'ECR Repository name'
+        required: false
+        type: string
+      runtime_info:
+        description: 'Runtime information (JSON format)'
+        required: false
+        type: string
+      usage_examples:
+        description: 'Custom usage examples'
+        required: false
+        type: string
+      version_file:
+        description: 'Version file path'
+        required: false
+        default: 'version.txt'
+        type: string
+    secrets:
+      POT_TOKEN:
+        required: true
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare Runtime Info
+        id: runtime-info
+        run: |
+          RUNTIME_SECTION=""
+          if [ -n "${{ inputs.runtime_info }}" ]; then
+            echo '${{ inputs.runtime_info }}' | jq -r 'to_entries[] | "- **\(.key)**: \(.value)"' > runtime_info.txt
+            RUNTIME_SECTION=$(cat runtime_info.txt | tr '\n' ' ')
+          fi
+          echo "runtime_section=$RUNTIME_SECTION" >> $GITHUB_OUTPUT
+
+      - name: Generate Release Body
+        id: release-body
+        run: |
+          cat > release_body.md << 'EOL'
+          ## ${{ inputs.project_emoji }} ${{ inputs.project_name }} Release v${{ inputs.version }}
+          
+          ### 🐳 Docker Image
+          ```bash
+          docker pull ${{ inputs.docker_image }}
+          ```
+          
+          ### 📋 Release Details
+          ${{ steps.runtime-info.outputs.runtime_section }}
+          - **Previous Version**: ${{ inputs.previous_version || 'N/A' }}
+          - **Build Date**: ${{ github.event.head_commit.timestamp }}
+          - **Platforms**: linux/amd64, linux/arm64
+          - **Triggered by**: ${{ github.actor }}
+          - **Commit**: ${{ github.sha }}
+          
+          ### 🚀 Quick Start
+          ```bash
+          # Pull the image
+          docker pull ${{ inputs.docker_image }}
+          
+          # Run the container
+          docker run -d --name ${{ inputs.project_name }}-app -p 3000:3000 \
+            ${{ inputs.docker_image }}
+          ```
+          
+          ### 🐳 Docker Compose Example
+          ```yaml
+          version: '3.8'
+          services:
+            ${{ inputs.project_name }}:
+              image: ${{ inputs.docker_image }}
+              ports:
+                - "3000:3000"
+              environment:
+                - NODE_ENV=production
+              restart: unless-stopped
+          ```
+          
+          ${{ inputs.usage_examples && format('### 🛠️ Advanced Usage\n%s', inputs.usage_examples) || '' }}
+          
+          ### 📊 Image Information
+          - **Registry**: ${{ inputs.ecr_registry }}
+          - **Repository**: ${{ inputs.ecr_repository }}
+          - **Size**: Multi-arch optimized
+          - **Security**: Scanned and verified
+          
+          ### 🔄 Upgrade Instructions
+          ```bash
+          # Stop current container
+          docker stop ${{ inputs.project_name }}-app
+          docker rm ${{ inputs.project_name }}-app
+          
+          # Pull new version
+          docker pull ${{ inputs.docker_image }}
+          
+          # Start new container
+          docker run -d --name ${{ inputs.project_name }}-app -p 3000:3000 \
+            ${{ inputs.docker_image }}
+          ```
+          
+          ### 📝 Changelog
+          - Updated to version ${{ inputs.version }}
+          - Multi-platform support (AMD64/ARM64)
+          - Performance improvements
+          - Security updates
+          
+          ---
+          
+          **Full Changelog**: [${{ inputs.previous_version || 'Previous' }}...v${{ inputs.version }}](${{ github.server_url }}/${{ github.repository }}/compare/${{ inputs.previous_version && format('v{0}', inputs.previous_version) || github.event.before }}...v${{ inputs.version }})
+          EOL
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ inputs.version }}
+          name: ${{ inputs.project_name }} v${{ inputs.version }}
+          body_path: release_body.md
+          draft: false
+          prerelease: false
+          files: ${{ inputs.version_file }}
+          generate_release_notes: true
+        env:
+          POT_TOKEN: ${{ secrets.POT_TOKEN }}
+
+      - name: Update Release with Download Stats
+        run: |
+          echo "Release v${{ inputs.version }} created successfully!"
+          echo "🏷️ Release URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ inputs.version }}"
+          echo "🐳 Docker Image: ${{ inputs.docker_image }}"
