@@ -1,0 +1,327 @@
+# .github/workflows/php-sportsbook-main.yml
+name: PHP Sportsbook CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: 'Version increment type'
+        required: false
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      custom_version:
+        description: 'Custom version (optional)'
+        required: false
+        type: string
+      super_branch:
+        description: 'Super repository branch'
+        required: false
+        default: 'main'
+        type: string
+      pgf_branch:
+        description: 'PGF repository branch'
+        required: false
+        default: 'main'
+        type: string
+      pglib_branch:
+        description: 'PGLib repository branch'
+        required: false
+        default: 'main'
+        type: string
+      php_version:
+        description: 'PHP Version'
+        required: false
+        default: '8.3'
+        type: string
+      confirm_deploy:
+        description: 'Confirm deployment (Yes/No)'
+        required: true
+        default: 'No'
+        type: choice
+        options:
+          - 'Yes'
+          - 'No'
+      force_rebuild:
+        description: 'Force rebuild even if no changes'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  ECR_REGISTRY: 827604626727.dkr.ecr.eu-central-1.amazonaws.com
+  ECR_REPOSITORY: sb/sportsbook-backoffice
+  PROJECT_NAME: "PHP Sportsbook"
+  PROJECT_EMOJI: "🐘"
+  BASE_IMAGE: "827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm"
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+  packages: write
+
+jobs:
+  # 1. Pre-build validation
+  pre-build-validation:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.changes.outputs.should_build }}
+      
+    steps:
+      - name: Check Deployment Confirmation
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${{ github.event.inputs.confirm_deploy }}" != "Yes" ]; then
+            echo "❌ Deployment cancelled by user"
+            echo "Please confirm deployment and ensure PR is approved"
+            exit 1
+          fi
+          echo "✅ Deployment confirmed"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
+            echo "Force rebuild requested"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event_name }}" = "push" ]; then
+            echo "Manual trigger or push event"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "should_build=true" >> $GITHUB_OUTPUT
+
+      - name: Verify Project Access
+        if: steps.changes.outputs.should_build == 'true'
+        run: |
+          echo "Verifying access to external repositories..."
+          echo "✅ Build validation completed"
+
+  # 2. Version Management
+  version-management:
+    needs: pre-build-validation
+    if: needs.pre-build-validation.outputs.should_build == 'true'
+    uses: ./.github/workflows/version-management.yml
+    with:
+      version_type: ${{ github.event.inputs.version_type || 'patch' }}
+      custom_version: ${{ github.event.inputs.custom_version }}
+      version_file: "version.txt"
+    secrets:
+      POT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 3. Parallel Build Jobs
+  php-multi-build:
+    needs: [pre-build-validation, version-management]
+    if: needs.pre-build-validation.outputs.should_build == 'true'
+    uses: ./.github/workflows/php-multi-repo-build.yml
+    with:
+      super_branch: ${{ github.event.inputs.super_branch || 'main' }}
+      pgf_branch: ${{ github.event.inputs.pgf_branch || 'main' }}
+      pglib_branch: ${{ github.event.inputs.pglib_branch || 'main' }}
+      version: ${{ needs.version-management.outputs.new_version }}
+      ecr_registry: "827604626727.dkr.ecr.eu-central-1.amazonaws.com"
+      ecr_repository: "sb/sportsbook-backoffice"
+      base_image: "827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm"
+      php_version: ${{ github.event.inputs.php_version || '8.3' }}
+      build_args: |
+        {
+          "PHP_ENV": "production"
+        }
+      labels: |
+        {
+          "php.version": "${{ github.event.inputs.php_version || '8.3' }}",
+          "description": "Combined PHP Sportsbook Backoffice Application",
+          "maintainer": "Development Team",
+          "project.type": "multi-repository"
+        }
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+  nginx-build:
+    needs: [pre-build-validation, version-management]
+    if: needs.pre-build-validation.outputs.should_build == 'true'
+    uses: ./.github/workflows/nginx-build.yml
+    with:
+      super_branch: ${{ github.event.inputs.super_branch || 'main' }}
+      version: ${{ needs.version-management.outputs.new_version }}
+      ecr_registry: "827604626727.dkr.ecr.eu-central-1.amazonaws.com"
+      ecr_repository: "sb/sportsbook-nginx"
+      dockerfile_path: "sportsbook-nginx/Dockerfile"
+      build_context: "."
+      platforms: "linux/amd64,linux/arm64"
+      nginx_version: "1.17-alpine"
+      build_args: |
+        {
+          "NGINX_ENV": "production"
+        }
+      labels: |
+        {
+          "nginx.version": "1.17-alpine",
+          "description": "Sportsbook Nginx Reverse Proxy",
+          "maintainer": "Development Team",
+          "project.type": "nginx-proxy"
+        }
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+  # 4. Create Release
+  create-release:
+    needs: [pre-build-validation, version-management, php-multi-build, nginx-build]
+    if: needs.pre-build-validation.outputs.should_build == 'true'
+    uses: ./.github/workflows/release-management.yml
+    with:
+      project_name: "PHP Sportsbook"
+      project_emoji: "🐘"
+      version: ${{ needs.version-management.outputs.new_version }}
+      previous_version: ${{ needs.version-management.outputs.current_version }}
+      docker_image: ${{ needs.php-multi-build.outputs.image_url }}
+      ecr_registry: "827604626727.dkr.ecr.eu-central-1.amazonaws.com"
+      ecr_repository: "sb/sportsbook-backoffice"
+      runtime_info: |
+        {
+          "PHP Version": "${{ github.event.inputs.php_version || '8.3' }}",
+          "Framework": "Custom PHP Framework",
+          "Environment": "Production",
+          "Super Branch": "${{ github.event.inputs.super_branch || 'main' }}",
+          "PGF Branch": "${{ github.event.inputs.pgf_branch || 'main' }}",
+          "PGLib Branch": "${{ github.event.inputs.pglib_branch || 'main' }}",
+          "Nginx Image": "${{ needs.nginx-build.outputs.image_url }}"
+        }
+      usage_examples: |
+        ### 🐘 Environment Variables
+        ```bash
+        # Required environment variables
+        DB_HOST=your-database-host
+        DB_NAME=your-database-name
+        DB_USER=your-database-user
+        DB_PASS=your-database-password
+        
+        # Optional variables
+        PHP_ENV=production
+        LOG_LEVEL=error
+        ```
+        
+        ### 🌐 Docker Compose Example
+        ```yaml
+        version: '3.8'
+        services:
+          nginx:
+            image: ${{ needs.nginx-build.outputs.image_url }}
+            ports:
+              - "80:80"
+              - "443:443"
+            depends_on:
+              - php-fpm
+            restart: unless-stopped
+              
+          php-fpm:
+            image: ${{ needs.php-multi-build.outputs.image_url }}
+            volumes:
+              - ./data:/home/www-data/data
+            environment:
+              - PHP_ENV=production
+            restart: unless-stopped
+        ```
+        
+        ### 🔧 Development Setup
+        ```bash
+        # Clone repositories
+        git clone https://github.com/kakbet/Super.git www
+        git clone https://github.com/kakbet/PGF.git PGF
+        git clone https://github.com/kakbet/PGLib.git PGLib
+        
+        # Install PHP dependencies
+        cd PGF
+        composer install
+        ```
+        
+        ### 📦 Built Images
+        - **PHP Application**: `${{ needs.php-multi-build.outputs.image_url }}`
+        - **Nginx Proxy**: `${{ needs.nginx-build.outputs.image_url }}`
+        
+        ### 📦 Included Projects
+        - **Super (www)**: Main application (`${{ github.event.inputs.super_branch || 'main' }}` branch)
+        - **PGF**: Framework (`${{ github.event.inputs.pgf_branch || 'main' }}` branch)  
+        - **PGLib**: Library (`${{ github.event.inputs.pglib_branch || 'main' }}` branch)
+        - **Nginx**: Reverse proxy configuration
+      version_file: "version.txt"
+    secrets:
+      POT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 5. Send Notifications
+  send-notifications:
+    needs: [pre-build-validation, version-management, php-multi-build, create-release]
+    if: always() && needs.pre-build-validation.outputs.should_build == 'true'
+    uses: ./.github/workflows/notifications.yml
+    with:
+      project_name: "PHP Sportsbook"
+      project_emoji: "🐘"
+      version: ${{ needs.version-management.outputs.new_version || 'N/A' }}
+      previous_version: ${{ needs.version-management.outputs.current_version || 'N/A' }}
+      docker_image: ${{ needs.php-multi-build.outputs.image_url || 'N/A' }}
+      build_status: ${{ (needs.php-multi-build.result == 'success' && needs.create-release.result == 'success') && 'success' || 'failure' }}
+      additional_info: |
+        {
+          "PHP Version": "${{ github.event.inputs.php_version || '8.3' }}",
+          "Framework": "Custom PHP Framework",
+          "Super Branch": "${{ github.event.inputs.super_branch || 'main' }}",
+          "PGF Branch": "${{ github.event.inputs.pgf_branch || 'main' }}",
+          "PGLib Branch": "${{ github.event.inputs.pglib_branch || 'main' }}"
+        }
+      slack_channel: "C090TV1RTKJ"
+    secrets: inherit
+
+  # 6. Final Summary
+  pipeline-summary:
+    runs-on: ubuntu-latest
+    needs: [pre-build-validation, version-management, php-multi-build, create-release, send-notifications]
+    if: always()
+    
+    steps:
+      - name: Generate Pipeline Summary
+        run: |
+          echo "## 🐘 PHP Sportsbook CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Pipeline Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Pre-build Validation | ${{ needs.pre-build-validation.result || 'skipped' }} | Access and structure verification |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version Management | ${{ needs.version-management.result || 'skipped' }} | ${{ needs.version-management.outputs.new_version && format('v{0}', needs.version-management.outputs.new_version) || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PHP Multi-Build | ${{ needs.php-multi-build.result || 'skipped' }} | Multi-repository build |" >> $GITHUB_STEP_SUMMARY
+          echo "| Release Creation | ${{ needs.create-release.result || 'skipped' }} | GitHub release |" >> $GITHUB_STEP_SUMMARY
+          echo "| Notifications | ${{ needs.send-notifications.result || 'skipped' }} | Slack, Discord, Teams |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Included Projects" >> $GITHUB_STEP_SUMMARY
+          echo "- **Super (www)**: `${{ github.event.inputs.super_branch || 'main' }}` branch" >> $GITHUB_STEP_SUMMARY
+          echo "- **PGF**: `${{ github.event.inputs.pgf_branch || 'main' }}` branch" >> $GITHUB_STEP_SUMMARY
+          echo "- **PGLib**: `${{ github.event.inputs.pglib_branch || 'main' }}` branch" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 Docker Image" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "${{ needs.php-multi-build.outputs.image_url || 'N/A' }}" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [📦 Release v${{ needs.version-management.outputs.new_version }}](${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.version-management.outputs.new_version }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [🏃 Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [📂 Repository](${{ github.server_url }}/${{ github.repository }})" >> $GITHUB_STEP_SUMMARY

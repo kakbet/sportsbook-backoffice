@@ -1,0 +1,264 @@
+# .github/workflows/notifications.yml (PHP Sportsbook version)
+name: Send Notifications
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        description: 'Project name'
+        required: true
+        type: string
+      project_emoji:
+        description: 'Project emoji'
+        required: false
+        default: '🐘'
+        type: string
+      version:
+        description: 'Version'
+        required: true
+        type: string
+      previous_version:
+        description: 'Previous version'
+        required: false
+        type: string
+      docker_image:
+        description: 'Docker image URL'
+        required: false
+        type: string
+      build_status:
+        description: 'Build status (success/failure/warning)'
+        required: true
+        type: string
+      additional_info:
+        description: 'Additional info (JSON format)'
+        required: false
+        type: string
+      slack_channel:
+        description: 'Slack channel ID'
+        required: false
+        default: 'C090TV1RTKJ'
+        type: string
+    secrets:
+      SLACK_BOT_TOKEN:
+        required: false
+      DISCORD_WEBHOOK:
+        required: false
+      TEAMS_WEBHOOK:
+        required: false
+
+jobs:
+  slack-notification:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check Slack Token
+        id: check-slack
+        run: |
+          if [ -n "${{ secrets.SLACK_BOT_TOKEN }}" ]; then
+            echo "token_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "token_available=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Slack token not available, skipping notification"
+          fi
+      
+      - name: Send Slack Notification
+        if: steps.check-slack.outputs.token_available == 'true'
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          channel-id: '${{ inputs.slack_channel }}'
+          payload: |
+            {
+              "text": "${{ inputs.build_status == 'success' && '🐘 PHP Sportsbook Build Successful! 🚀' || inputs.build_status == 'failure' && '💥 PHP Sportsbook Build Failed! ❌' || '⚠️ PHP Sportsbook Build Warning! ⚠️' }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ inputs.build_status == 'success' && '🐘 PHP Sportsbook Build Successful! 🚀' || inputs.build_status == 'failure' && '💥 PHP Sportsbook Build Failed! ❌' || '⚠️ PHP Sportsbook Build Warning! ⚠️' }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*🏷️ Version: v${{ inputs.version }}*\n_Combined PHP Sportsbook Application Successfully Deployed!_"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*📁 Project:*\n${{ inputs.project_name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*📂 Repository:*\n<${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*🏷️ New Version:*\n`v${{ inputs.version }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*🏷️ Previous Version:*\n`v${{ inputs.previous_version || 'N/A' }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*👤 Triggered By:*\n${{ github.actor }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*📅 Build Date:*\n$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*🐳 Docker Images:*\n• **PHP App**: `${{ inputs.docker_image || 'N/A' }}`\n• **Nginx**: `${{ fromJSON(inputs.additional_info || '{}').nginx_image || 'N/A' }}`"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*🏗️ Build Details:*\n• **Framework**: Custom PHP Framework\n• **Status**: ${{ inputs.build_status }}\n• **Multi-Repository**: Super + PGF + PGLib\n• **PHP Version**: 8.3\n• **Nginx**: Reverse Proxy Included"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "🏷️ View Release v${{ inputs.version }}"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ inputs.version }}",
+                      "style": "primary"
+                    },
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "🔧 View Workflow"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+  discord-notification:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check Discord Webhook
+        id: check-discord
+        run: |
+          if [ -n "${{ secrets.DISCORD_WEBHOOK }}" ]; then
+            echo "webhook_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "webhook_available=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Discord webhook not available, skipping notification"
+          fi
+      
+      - name: Send Discord Notification
+        if: steps.check-discord.outputs.webhook_available == 'true'
+        run: |
+          # Build status için color ve emoji belirle
+          case "${{ inputs.build_status }}" in
+            "success")
+              STATUS_EMOJI="✅"
+              STATUS_COLOR="3066993"
+              ;;
+            "failure")
+              STATUS_EMOJI="❌"
+              STATUS_COLOR="15158332"
+              ;;
+            *)
+              STATUS_EMOJI="⚠️"
+              STATUS_COLOR="16776960"
+              ;;
+          esac
+          
+          curl -H "Content-Type: application/json" \
+               -d '{
+                 "embeds": [{
+                   "title": "${{ inputs.project_emoji }} ${{ inputs.project_name }} Build ${{ inputs.build_status }}",
+                   "description": "Version **v${{ inputs.version }}** has been built and deployed!\n\n📦 **Included Projects:**\n• Super (www)\n• PGF Framework\n• PGLib Library\n• Nginx Reverse Proxy",
+                   "color": '"$STATUS_COLOR"',
+                   "fields": [
+                     {"name": "🏷️ Version", "value": "v${{ inputs.version }}", "inline": true},
+                     {"name": "🐘 PHP Version", "value": "8.3", "inline": true},
+                     {"name": "👤 Triggered by", "value": "${{ github.actor }}", "inline": true},
+                     {"name": "📂 Repository", "value": "[${{ github.repository }}](${{ github.server_url }}/${{ github.repository }})", "inline": false},
+                     {"name": "🐳 PHP Image", "value": "`${{ inputs.docker_image }}`", "inline": false},
+                     {"name": "🌐 Nginx Image", "value": "`${{ fromJSON(inputs.additional_info || '{}').nginx_image || 'N/A' }}`", "inline": false}
+                   ],
+                   "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
+                 }]
+               }' \
+               ${{ secrets.DISCORD_WEBHOOK }}
+
+  teams-notification:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check Teams Webhook
+        id: check-teams
+        run: |
+          if [ -n "${{ secrets.TEAMS_WEBHOOK }}" ]; then
+            echo "webhook_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "webhook_available=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Teams webhook not available, skipping notification"
+          fi
+      
+      - name: Send Teams Notification
+        if: steps.check-teams.outputs.webhook_available == 'true'
+        run: |
+          # Build status için color belirle
+          case "${{ inputs.build_status }}" in
+            "success")
+              STATUS_COLOR="Good"
+              ;;
+            "failure")
+              STATUS_COLOR="Attention"
+              ;;
+            *)
+              STATUS_COLOR="Warning"
+              ;;
+          esac
+          
+          curl -H "Content-Type: application/json" \
+               -d '{
+                 "@type": "MessageCard",
+                 "@context": "http://schema.org/extensions",
+                 "themeColor": "'"$STATUS_COLOR"'",
+                 "summary": "${{ inputs.project_name }} Build ${{ inputs.build_status }}",
+                 "sections": [{
+                   "activityTitle": "${{ inputs.project_emoji }} ${{ inputs.project_name }} Build ${{ inputs.build_status }}",
+                   "activitySubtitle": "Version v${{ inputs.version }} deployed - Multi-Repository PHP Application with Nginx",
+                   "facts": [
+                     {"name": "Version", "value": "v${{ inputs.version }}"},
+                     {"name": "Repository", "value": "${{ github.repository }}"},
+                     {"name": "PHP Version", "value": "8.3"},
+                     {"name": "Framework", "value": "Custom PHP Framework"},
+                     {"name": "Triggered by", "value": "${{ github.actor }}"},
+                     {"name": "Build Date", "value": "'"$(date -u +%Y-%m-%d\ %H:%M:%S\ UTC)"'"},
+                     {"name": "Projects", "value": "Super + PGF + PGLib + Nginx"}
+                   ]
+                 }],
+                 "potentialAction": [{
+                   "@type": "OpenUri",
+                   "name": "View Release",
+                   "targets": [{"os": "default", "uri": "${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ inputs.version }}"}]
+                 }]
+               }' \
+               ${{ secrets.TEAMS_WEBHOOK }}

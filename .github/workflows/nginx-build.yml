@@ -1,0 +1,240 @@
+# .github/workflows/nginx-build.yml
+name: Nginx Build and Push
+
+on:
+  workflow_call:
+    inputs:
+      super_branch:
+        description: 'Super repository branch'
+        required: false
+        default: 'main'
+        type: string
+      version:
+        description: 'Version tag'
+        required: true
+        type: string
+      ecr_registry:
+        description: 'ECR Registry URL'
+        required: true
+        type: string
+      ecr_repository:
+        description: 'ECR Repository name'
+        required: true
+        type: string
+      dockerfile_path:
+        description: 'Dockerfile path'
+        required: false
+        default: 'sportsbook-nginx/Dockerfile'
+        type: string
+      build_context:
+        description: 'Build context path'
+        required: false
+        default: '.'
+        type: string
+      platforms:
+        description: 'Target platforms'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: string
+      nginx_version:
+        description: 'Nginx version'
+        required: false
+        default: '1.17-alpine'
+        type: string
+      build_args:
+        description: 'Build arguments (JSON format)'
+        required: false
+        type: string
+      labels:
+        description: 'Labels (JSON format)'
+        required: false
+        type: string
+    outputs:
+      image_url:
+        description: "Full Docker image URL"
+        value: ${{ jobs.nginx-build.outputs.image_url }}
+      image_digest:
+        description: "Image digest"
+        value: ${{ jobs.nginx-build.outputs.image_digest }}
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      PAT_TOKEN:
+        required: true
+
+jobs:
+  nginx-build:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      image_url: ${{ steps.build.outputs.image_url }}
+      image_digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+      - name: Checkout Main Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+          path: main
+
+      - name: Checkout Super Repository (www)
+        uses: actions/checkout@v4
+        with:
+          repository: kakbet/Super
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ inputs.super_branch }}
+          path: www
+
+      - name: Prepare Project Structure for Nginx Build
+        run: |
+          echo "Setting up project structure for nginx build..."
+          
+          # Nginx için gerekli dosyaları main repository'den kopyala
+          cp -r main/sportsbook-nginx .
+          
+          # www klasörünü root'a kopyala (Dockerfile bunu bekliyor)
+          # COPY www /home/www-data/www satırı için
+          
+          echo "Project structure ready for nginx build:"
+          ls -la
+          echo "Nginx files:"
+          ls -la sportsbook-nginx/
+
+      - name: Clean Git Directories
+        run: |
+          echo "Cleaning .git directories..."
+          rm -rf www/.git
+          echo "Cleanup completed"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: ${{ inputs.platforms }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Verify Nginx Configuration
+        run: |
+          echo "Verifying nginx configuration..."
+          
+          # Dockerfile kontrol
+          if [ ! -f "${{ inputs.dockerfile_path }}" ]; then
+            echo "❌ Dockerfile not found at ${{ inputs.dockerfile_path }}!"
+            exit 1
+          fi
+          echo "✅ Found: ${{ inputs.dockerfile_path }}"
+          
+          # Nginx conf dosyaları kontrol
+          if [ -f "sportsbook-nginx/nginx.conf" ]; then
+            echo "✅ Found: nginx.conf"
+          fi
+          
+          if [ -f "sportsbook-nginx/conf.d/default.conf" ]; then
+            echo "✅ Found: default.conf"
+          fi
+          
+          # www klasörü kontrol
+          if [ -d "www" ]; then
+            echo "✅ Found: www directory"
+            echo "www contents:"
+            ls -la www/ | head -10
+          else
+            echo "❌ www directory not found!"
+            exit 1
+          fi
+          
+          echo "✅ Nginx structure verified"
+
+      - name: Prepare Build Arguments
+        id: build-args
+        run: |
+          BUILD_ARGS=""
+          if [ -n "${{ inputs.build_args }}" ]; then
+            echo '${{ inputs.build_args }}' | jq -r 'to_entries[] | "--build-arg \(.key)=\(.value)"' > build_args.txt
+            BUILD_ARGS=$(cat build_args.txt | tr '\n' ' ')
+          fi
+          
+          # Default build args
+          BUILD_ARGS="$BUILD_ARGS --build-arg VERSION=${{ inputs.version }}"
+          BUILD_ARGS="$BUILD_ARGS --build-arg NGINX_VERSION=${{ inputs.nginx_version }}"
+          
+          echo "build_args=$BUILD_ARGS" >> $GITHUB_OUTPUT
+
+      - name: Prepare Labels
+        id: labels
+        run: |
+          LABELS=""
+          if [ -n "${{ inputs.labels }}" ]; then
+            echo '${{ inputs.labels }}' | jq -r 'to_entries[] | "--label \(.key)=\(.value)"' > labels.txt
+            LABELS=$(cat labels.txt | tr '\n' ' ')
+          fi
+          
+          # Default labels
+          LABELS="$LABELS --label version=${{ inputs.version }}"
+          LABELS="$LABELS --label build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          LABELS="$LABELS --label build.revision=${{ github.sha }}"
+          LABELS="$LABELS --label description=\"Sportsbook Nginx Reverse Proxy\""
+          LABELS="$LABELS --label nginx.version=\"${{ inputs.nginx_version }}\""
+          LABELS="$LABELS --label super.branch=\"${{ inputs.super_branch }}\""
+          
+          echo "labels=$LABELS" >> $GITHUB_OUTPUT
+
+      - name: Prepare Tags
+        id: tags
+        run: |
+          IMAGE_BASE="${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}"
+          TAGS="-t ${IMAGE_BASE}:${{ inputs.version }} -t ${IMAGE_BASE}:latest"
+          
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+
+      - name: Build and Push Nginx Docker Image
+        id: build
+        run: |
+          echo "🌐 Building and pushing Sportsbook Nginx Docker image..."
+          
+          IMAGE_URL="${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }}"
+          
+          docker buildx build \
+            --push \
+            --platform ${{ inputs.platforms }} \
+            --progress=plain \
+            --network=host \
+            ${{ steps.build-args.outputs.build_args }} \
+            ${{ steps.tags.outputs.tags }} \
+            ${{ steps.labels.outputs.labels }} \
+            -f ${{ inputs.dockerfile_path }} \
+            ${{ inputs.build_context }}
+          
+          echo "image_url=$IMAGE_URL" >> $GITHUB_OUTPUT
+          echo "✅ Sportsbook Nginx image built and pushed successfully"
+
+      - name: Generate Nginx Build Report
+        if: success()
+        run: |
+          echo "## 🌐 Nginx Multi-Repository Build Report" >> nginx_build_report.md
+          echo "- **Image**: ${{ steps.build.outputs.image_url }}" >> nginx_build_report.md
+          echo "- **Nginx Version**: ${{ inputs.nginx_version }}" >> nginx_build_report.md
+          echo "- **Super Branch**: ${{ inputs.super_branch }}" >> nginx_build_report.md
+          echo "- **Platforms**: ${{ inputs.platforms }}" >> nginx_build_report.md
+          echo "- **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> nginx_build_report.md
+          echo "- **Git Commit**: ${{ github.sha }}" >> nginx_build_report.md
+          echo "- **Configuration**: Custom nginx + conf.d setup" >> nginx_build_report.md
+
+      - name: Upload Nginx Build Report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-build-report-${{ inputs.version }}
+          path: nginx_build_report.md
+          retention-days: 30

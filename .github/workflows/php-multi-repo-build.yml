@@ -1,0 +1,280 @@
+# .github/workflows/php-multi-repo-build.yml
+name: PHP Multi-Repository Build and Push
+
+on:
+  workflow_call:
+    inputs:
+      super_branch:
+        description: 'Super repository branch'
+        required: false
+        default: 'main'
+        type: string
+      pgf_branch:
+        description: 'PGF repository branch'
+        required: false
+        default: 'main'
+        type: string
+      pglib_branch:
+        description: 'PGLib repository branch'
+        required: false
+        default: 'main'
+        type: string
+      version:
+        description: 'Version tag'
+        required: true
+        type: string
+      ecr_registry:
+        description: 'ECR Registry URL'
+        required: true
+        type: string
+      ecr_repository:
+        description: 'ECR Repository name'
+        required: true
+        type: string
+      base_image:
+        description: 'Base Docker image'
+        required: false
+        default: '827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm'
+        type: string
+      php_version:
+        description: 'PHP Version'
+        required: false
+        default: '8.3'
+        type: string
+      build_args:
+        description: 'Build arguments (JSON format)'
+        required: false
+        type: string
+      labels:
+        description: 'Labels (JSON format)'
+        required: false
+        type: string
+    outputs:
+      image_url:
+        description: "Full Docker image URL"
+        value: ${{ jobs.php-multi-build.outputs.image_url }}
+      image_digest:
+        description: "Image digest"
+        value: ${{ jobs.php-multi-build.outputs.image_digest }}
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      PAT_TOKEN:
+        required: true
+
+jobs:
+  php-multi-build:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      image_url: ${{ steps.build.outputs.image_url }}
+      image_digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+      - name: Checkout Main Orchestrator Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+          path: main
+
+      - name: Checkout Super Repository (www)
+        uses: actions/checkout@v4
+        with:
+          repository: kakbet/Super
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ inputs.super_branch }}
+          path: www
+
+      - name: Checkout PGF Repository
+        uses: actions/checkout@v4
+        with:
+          repository: kakbet/PGF
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ inputs.pgf_branch }}
+          path: PGF
+
+      - name: Checkout PGLib Repository
+        uses: actions/checkout@v4
+        with:
+          repository: kakbet/PGLib
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ inputs.pglib_branch }}
+          path: PGLib
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php_version }}
+          extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_mysql, dom, filter, gd, json
+          tools: composer:v2
+
+      - name: Prepare Project Structure
+        run: |
+          echo "Setting up project structure..."
+          
+          # Ana dizin yapısını oluştur
+          mkdir -p main/build
+          
+          # Projeleri ana dizine kopyala
+          cp -r www main/build/www
+          cp -r PGF main/build/PGF
+          cp -r PGLib main/build/PGLib
+          
+          echo "Project structure ready:"
+          ls -la main/build/
+
+      - name: Install Composer Dependencies
+        working-directory: main/build/PGF
+        run: |
+          echo "Installing PGF dependencies..."
+          composer install --no-dev --optimize-autoloader --no-interaction
+          
+          echo "Composer install completed"
+          ls -la vendor/ || echo "No vendor directory created"
+
+      - name: Clean Git Directories
+        working-directory: main/build
+        run: |
+          echo "Cleaning .git directories..."
+          rm -rf PGF/.git PGLib/.git www/.git
+          
+          # Sessions dizini oluştur
+          mkdir -p www/.sessions
+          
+          echo "Cleanup completed"
+
+      - name: Prepare Build Arguments
+        id: build-args
+        run: |
+          BUILD_ARGS=""
+          if [ -n "${{ inputs.build_args }}" ]; then
+            echo '${{ inputs.build_args }}' | jq -r 'to_entries[] | "--build-arg \(.key)=\(.value)"' > build_args.txt
+            BUILD_ARGS=$(cat build_args.txt | tr '\n' ' ')
+          fi
+          
+          # Default build args
+          BUILD_ARGS="$BUILD_ARGS --build-arg VERSION=${{ inputs.version }}"
+          
+          echo "build_args=$BUILD_ARGS" >> $GITHUB_OUTPUT
+
+      - name: Prepare Labels
+        id: labels
+        run: |
+          LABELS=""
+          if [ -n "${{ inputs.labels }}" ]; then
+            echo '${{ inputs.labels }}' | jq -r 'to_entries[] | "--label \(.key)=\(.value)"' > labels.txt
+            LABELS=$(cat labels.txt | tr '\n' ' ')
+          fi
+          
+          # Default labels
+          LABELS="$LABELS --label version=${{ inputs.version }}"
+          LABELS="$LABELS --label build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          LABELS="$LABELS --label build.revision=${{ github.sha }}"
+          LABELS="$LABELS --label description=\"Combined PHP Sportsbook Backoffice Application\""
+          LABELS="$LABELS --label php.version=\"${{ inputs.php_version }}\""
+          
+          echo "labels=$LABELS" >> $GITHUB_OUTPUT
+
+      - name: Create Dockerfile
+        working-directory: main
+        run: |
+          cat > Dockerfile << 'EOF'
+          # Multi-stage build for PHP Sportsbook
+          FROM ${{ inputs.base_image }}:latest AS builder
+          
+          WORKDIR /home/www-data
+          
+          # Install git for any additional operations
+          RUN set -eux && apk add --no-cache git
+          
+          # Create lib directory
+          RUN mkdir -p /home/www-data/lib
+          
+          # Copy projects
+          COPY build/www /home/www-data/www
+          COPY build/PGLib /home/www-data/lib/PGLib
+          COPY build/PGF /home/www-data/lib/PGF
+          
+          # Ensure composer dependencies are installed
+          RUN if [ -f "/home/www-data/lib/PGF/composer.json" ] && [ ! -d "/home/www-data/lib/PGF/vendor" ]; then \
+                composer install --working-dir=/home/www-data/lib/PGF --no-dev --optimize-autoloader; \
+              fi
+          
+          # Create sessions directory
+          RUN mkdir -p www/.sessions
+          
+          # Configure PHP-FPM status and ping
+          RUN echo 'pm.status_path = /status' >> /usr/local/etc/php-fpm.d/www.conf
+          RUN echo 'ping.path = /ping' >> /usr/local/etc/php-fpm.d/www.conf
+          
+          # Production stage
+          FROM ${{ inputs.base_image }}:latest AS production
+          
+          WORKDIR /home/www-data/www
+          
+          # Copy everything from builder
+          COPY --from=builder /home/www-data /home/www-data
+          
+          # Set proper ownership
+          RUN chown www-data:www-data -R /home/www-data/
+          
+          EXPOSE 9000
+          
+          CMD ["php-fpm"]
+          EOF
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker Image
+        id: build
+        working-directory: main
+        run: |
+          echo "🐘 Building and pushing PHP Sportsbook Docker image..."
+          
+          IMAGE_URL="${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }}"
+          
+          # Build image
+          docker build \
+            -t ${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }} \
+            -t ${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:latest \
+            ${{ steps.build-args.outputs.build_args }} \
+            ${{ steps.labels.outputs.labels }} \
+            .
+          
+          echo "Pushing to ECR..."
+          docker push ${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }}
+          docker push ${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:latest
+          
+          echo "image_url=$IMAGE_URL" >> $GITHUB_OUTPUT
+          echo "✅ PHP Sportsbook image built and pushed successfully"
+
+      - name: Generate Build Report
+        if: success()
+        run: |
+          echo "## 🐘 PHP Multi-Repository Build Report" >> build_report.md
+          echo "- **Image**: ${{ steps.build.outputs.image_url }}" >> build_report.md
+          echo "- **PHP Version**: ${{ inputs.php_version }}" >> build_report.md
+          echo "- **Super Branch**: ${{ inputs.super_branch }}" >> build_report.md
+          echo "- **PGF Branch**: ${{ inputs.pgf_branch }}" >> build_report.md
+          echo "- **PGLib Branch**: ${{ inputs.pglib_branch }}" >> build_report.md
+          echo "- **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> build_report.md
+          echo "- **Git Commit**: ${{ github.sha }}" >> build_report.md
+
+      - name: Upload Build Report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-build-report-${{ inputs.version }}
+          path: build_report.md
+          retention-days: 30
