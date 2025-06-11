@@ -205,7 +205,7 @@ jobs:
           
           # Create sessions directory
           RUN mkdir -p www/.sessions
-          
+          RUN mkdir -p www/.tmp
           # Configure PHP-FPM status and ping
           RUN echo 'pm.status_path = /status' >> /usr/local/etc/php-fpm.d/www.conf
           RUN echo 'ping.path = /ping' >> /usr/local/etc/php-fpm.d/www.conf
