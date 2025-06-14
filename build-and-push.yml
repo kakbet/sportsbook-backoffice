@@ -447,3 +447,4 @@ jobs:
         echo "- **Status**: ${{ needs.php-multi-build.result }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Docker Image**: \`${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ needs.php-multi-build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
         echo "- **Release**: [v${{ needs.php-multi-build.outputs.version }}](${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.php-multi-build.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+        
