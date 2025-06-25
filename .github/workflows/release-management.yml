@@ -53,13 +53,32 @@ on:
 jobs:
   create-release:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # BU SATIRI KALDIR - Sınırlayıcı koşul
+    # if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.POT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Check if Release Already Exists
+        id: check-release
+        run: |
+          # GitHub API ile bu tag'in zaten var olup olmadığını kontrol et
+          if gh release view "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "release_exists=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Release v${{ inputs.version }} already exists, skipping creation"
+          else
+            echo "release_exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Release v${{ inputs.version }} does not exist, will create"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.POT_TOKEN }}
 
       - name: Prepare Runtime Info
+        if: steps.check-release.outputs.release_exists == 'false'
         id: runtime-info
         run: |
           RUNTIME_SECTION=""
@@ -70,6 +89,7 @@ jobs:
           echo "runtime_section=$RUNTIME_SECTION" >> $GITHUB_OUTPUT
 
       - name: Generate Release Body
+        if: steps.check-release.outputs.release_exists == 'false'
         id: release-body
         run: |
           cat > release_body.md << 'EOL'
@@ -83,7 +103,7 @@ jobs:
           ### 📋 Release Details
           ${{ steps.runtime-info.outputs.runtime_section }}
           - **Previous Version**: ${{ inputs.previous_version || 'N/A' }}
-          - **Build Date**: ${{ github.event.head_commit.timestamp }}
+          - **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
           - **Platforms**: linux/amd64, linux/arm64
           - **Triggered by**: ${{ github.actor }}
           - **Commit**: ${{ github.sha }}
@@ -145,6 +165,7 @@ jobs:
           EOL
 
       - name: Create GitHub Release
+        if: steps.check-release.outputs.release_exists == 'false'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ inputs.version }}
@@ -154,11 +175,17 @@ jobs:
           prerelease: false
           files: ${{ inputs.version_file }}
           generate_release_notes: true
-        env:
-          POT_TOKEN: ${{ secrets.POT_TOKEN }}
+          token: ${{ secrets.POT_TOKEN }}
 
       - name: Update Release with Download Stats
+        if: steps.check-release.outputs.release_exists == 'false'
         run: |
           echo "Release v${{ inputs.version }} created successfully!"
           echo "🏷️ Release URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ inputs.version }}"
           echo "🐳 Docker Image: ${{ inputs.docker_image }}"
+          
+      - name: Skip Release Creation
+        if: steps.check-release.outputs.release_exists == 'true'
+        run: |
+          echo "Release v${{ inputs.version }} already exists, skipping creation"
+          echo "🏷️ Existing Release URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ inputs.version }}"
