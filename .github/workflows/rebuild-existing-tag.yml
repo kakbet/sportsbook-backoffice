@@ -121,7 +121,9 @@ jobs:
           "rebuild.date": "${{ github.run_id }}"
         }
     secrets:
-      POT_TOKEN: ${{ secrets.POT_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
   # 3. Rebuild Nginx
   nginx-rebuild:
@@ -152,7 +154,9 @@ jobs:
           "rebuild.date": "${{ github.run_id }}"
         }
     secrets:
-      POT_TOKEN: ${{ secrets.POT_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
   # 4. Summary
   rebuild-summary:
