@@ -26,9 +26,6 @@ on:
         default: '8.3'
         type: string
 
-env:
-  POT_TOKEN: ${{ secrets.POT_TOKEN }}
-
 permissions:
   contents: write
   actions: read
@@ -48,7 +45,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.POT_TOKEN }}
+          token: ${{ github.token }}
           fetch-depth: 0
 
       - name: Validate Tag Exists
