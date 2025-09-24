@@ -1,2 +1,2 @@
 New Version List 
-4.2.35
+4.2.36
