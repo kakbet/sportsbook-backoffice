@@ -7,6 +7,15 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      base_image_tag:
+        description: >-
+          Tag of sb/sportsbook-php-fpm to build FROM. Leave empty on main
+          (defaults to `latest`); a branch run must name the base repo's
+          branch-scoped tag, because that repo's fence withholds `latest`
+          off main.
+        required: false
+        default: ''
+        type: string
       version_type:
         description: 'Version increment type'
         required: false
@@ -138,6 +147,15 @@ jobs:
       ecr_registry: "827604626727.dkr.ecr.eu-central-1.amazonaws.com"
       ecr_repository: "sb/sportsbook-backoffice"
       base_image: "827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm"
+      # 🔴 CROSS-REPO DEPENDENCY: this image builds FROM sb/sportsbook-php-fpm.
+      # That repo's own branch fence withholds `:latest` off main, so on a
+      # branch run `latest` is still the OLD single-architecture base and the
+      # arm64 leg would have no base to build on. The dispatch input lets a
+      # branch run point at the base repo's branch-scoped tag.
+      base_image_tag: ${{ github.event.inputs.base_image_tag || 'latest' }}
+      # Both architectures ship from one manifest list. This image is PHP on an
+      # Alpine base: the arm64 leg runs its `apk add` under QEMU emulation.
+      platforms: "linux/amd64,linux/arm64"
       php_version: ${{ github.event.inputs.php_version || '8.3' }}
       build_args: |
         {
@@ -187,7 +205,11 @@ jobs:
   # 4. Create Release
   create-release:
     needs: [pre-build-validation, version-management, php-multi-build, nginx-build]
-    if: needs.pre-build-validation.outputs.should_build == 'true'
+    # A GitHub release is a production name. release-management.yml's own job
+    # has NO condition at all (measured), so the caller is the only place this
+    # can be stated — without it a branch dispatch cut v<version> against
+    # branch code.
+    if: needs.pre-build-validation.outputs.should_build == 'true' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/release-management.yml
     with:
       project_name: "PHP Sportsbook"

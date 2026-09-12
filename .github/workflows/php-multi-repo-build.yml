@@ -31,6 +31,20 @@ on:
         description: 'ECR Repository name'
         required: true
         type: string
+      platforms:
+        description: 'Target platforms'
+        required: false
+        default: 'linux/amd64'
+        type: string
+      base_image_tag:
+        description: >-
+          Tag of the base image to build FROM. Defaults to `latest`, which is
+          what main publishes. A BRANCH run must override it: the base repo's
+          own fence withholds `latest` off main, so `latest` would still be the
+          old single-architecture image and the arm64 leg would have no base.
+        required: false
+        default: 'latest'
+        type: string
       base_image:
         description: 'Base Docker image'
         required: false
@@ -66,7 +80,9 @@ on:
 
 jobs:
   php-multi-build:
-    runs-on: ubuntu-latest
+    # The GitHub-hosted pool is billing-blocked on this org: jobs queue and
+    # never start. Every sibling repo builds on the self-hosted pool.
+    runs-on: [self-hosted, Linux]
     
     outputs:
       image_url: ${{ steps.build.outputs.image_url }}
@@ -183,7 +199,7 @@ jobs:
         run: |
           cat > Dockerfile << 'EOF'
           # Multi-stage build for PHP Sportsbook
-          FROM ${{ inputs.base_image }}:latest AS builder
+          FROM ${{ inputs.base_image }}:${{ inputs.base_image_tag }} AS builder
           
           WORKDIR /home/www-data
           
@@ -211,7 +227,7 @@ jobs:
           RUN echo 'ping.path = /ping' >> /usr/local/etc/php-fpm.d/www.conf
           
           # Production stage
-          FROM ${{ inputs.base_image }}:latest AS production
+          FROM ${{ inputs.base_image }}:${{ inputs.base_image_tag }} AS production
           
           WORKDIR /home/www-data/www
           
@@ -226,6 +242,23 @@ jobs:
           CMD ["php-fpm"]
           EOF
 
+      # 🪤 ORDER: isolate BEFORE buildx. buildx keeps builder state under
+      # $DOCKER_CONFIG/buildx; isolate later and the builder lands in the
+      # SHARED directory while the build looks in the isolated one.
+      # WHY: every runner on this host shares HOME, so one ~/.docker/config.json
+      # is shared state between concurrent jobs and amazon-ecr-login's post step
+      # DELETES the credentials it wrote — measured in a sibling repo as a
+      # `401 Unauthorized` on the push of an already-built image.
+      - name: Isolate Docker config for this job
+        run: |
+          cfg="$RUNNER_TEMP/docker-$GITHUB_RUN_ID-$GITHUB_JOB"
+          mkdir -p "$cfg"
+          echo '{}' > "$cfg/config.json"
+          echo "DOCKER_CONFIG=$cfg" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -236,28 +269,46 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Prepare Tags
+        id: tags
+        # 🔴 `:latest` was pushed on EVERY build. The calling pipeline accepts
+        # workflow_dispatch from ANY ref, so a branch run republished the
+        # production `:latest` of sb/sportsbook-backoffice from branch code.
+        # The decision now comes from scripts/ci/prepare-image-tags.sh, the same
+        # file the sibling repos use.
+        # VERSION_SOURCE=allocated: version-management picks the version in THIS
+        # run and proves it free, so the already-released guard must not fire on
+        # the tag it just created.
+        env:
+          ECR_REGISTRY: ${{ inputs.ecr_registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr_repository }}
+          VERSION_VALUE: ${{ inputs.version }}
+          VERSION_SOURCE: allocated
+          TAG_STYLE: docker-args
+        run: ./scripts/ci/prepare-image-tags.sh >> "$GITHUB_OUTPUT"
+
       - name: Build and Push Docker Image
         id: build
         working-directory: main
+        # 🔴 ONE buildx step replaces `docker build` plus two `docker push`
+        # calls. A multi-architecture build produces a manifest LIST and the
+        # local Docker daemon cannot hold one, so the old form would either
+        # silently collapse to a single architecture or fail on load. `--push`
+        # writes the list straight to the registry, the only place it can live.
+        # This image is PHP on an Alpine base: the arm64 leg runs its `apk add`
+        # under QEMU emulation rather than being cross-compiled.
         run: |
-          echo "🐘 Building and pushing PHP Sportsbook Docker image..."
-          
-          IMAGE_URL="${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }}"
-          
-          # Build image
-          docker build \
-            -t ${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }} \
-            -t ${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:latest \
+          echo "Building and pushing PHP Sportsbook Docker image..."
+          docker buildx build \
+            --push \
+            --platform ${{ inputs.platforms }} \
+            --progress=plain \
+            ${{ steps.tags.outputs.docker_args }} \
             ${{ steps.build-args.outputs.build_args }} \
             ${{ steps.labels.outputs.labels }} \
             .
-          
-          echo "Pushing to ECR..."
-          docker push ${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }}
-          docker push ${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:latest
-          
-          echo "image_url=$IMAGE_URL" >> $GITHUB_OUTPUT
-          echo "✅ PHP Sportsbook image built and pushed successfully"
+          echo "image_url=${{ steps.tags.outputs.image_url }}" >> "$GITHUB_OUTPUT"
+          echo "pushed: ${{ steps.tags.outputs.tags }}"
 
       - name: Generate Build Report
         if: success()
