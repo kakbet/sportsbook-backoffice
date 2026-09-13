@@ -80,9 +80,16 @@ on:
 
 jobs:
   php-multi-build:
-    # The GitHub-hosted pool is billing-blocked on this org: jobs queue and
-    # never start. Every sibling repo builds on the self-hosted pool.
-    runs-on: [self-hosted, Linux]
+    # 🪤 GERI ALINDI. Bunu self-hosted'a tasimistim, ama OLCULDU (kosum
+    # 34744094370): `Setup PHP` adimi orada 56 DAKIKA asili kaldi --
+    # shivammathur/setup-php PHP'yi sistem geneline kurmaya calisiyor ve
+    # paylasik host'ta ilerlemiyor. Tasima zaten GEREKSIZDI: AYNI kosumda
+    # pre-build-validation, version-management ve nginx-build isleri
+    # ubuntu-latest uzerinde BASARIYLA kostu, yani bu depo kota-bloklu
+    # degil. Cift mimari de burada kanitli: nginx-build ayni havuzda
+    # sb/sportsbook-nginx'i cift mimari basiyor (GitHub-hosted imajlarda
+    # binfmt kayitli gelir).
+    runs-on: ubuntu-latest
     
     outputs:
       image_url: ${{ steps.build.outputs.image_url }}
