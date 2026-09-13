@@ -60,6 +60,39 @@ emit_tags() {
 
   if [ "$is_main" = true ]; then
     primary="${INPUT_TAG:-}"
+    if [ -n "$primary" ]; then
+      # 🔴 INPUT_TAG cagirandan gelen SERBEST METIN ve bu betigin kendi basligi
+      # onu "tek seferlik build" diye tarif ediyor. Dogrulanmadigi surece o
+      # tarif YANLISTI: olculdu, `INPUT_TAG=0.2.0` (v0.2.0 YAYIMLANMIS iken)
+      # `:0.2.0`i yeni kodun ustune tasiyordu -- yani bu dosyanin basliginda
+      # "kapattik" diye yazan 1. KAPI hala acikti. `INPUT_TAG` icine virgul
+      # koymak da etiket listesine ikinci bir ad enjekte ediyordu.
+      case "$primary" in
+        *,*|*" "*|*"$(printf '\t')"*)
+          echo "prepare-image-tags: INPUT_TAG must be a single tag (no comma/space): $primary" >&2
+          return 1 ;;
+      esac
+      case "$primary" in
+        [A-Za-z0-9_]*) : ;;
+        *) echo "prepare-image-tags: INPUT_TAG is not a legal image tag: $primary" >&2; return 1 ;;
+      esac
+      if [ -n "$(printf '%s' "$primary" | tr -d 'A-Za-z0-9_.-')" ]; then
+        echo "prepare-image-tags: INPUT_TAG has characters outside [A-Za-z0-9_.-]: $primary" >&2
+        return 1
+      fi
+      for reserved in latest test; do
+        if [ "$primary" = "$reserved" ]; then
+          echo "prepare-image-tags: INPUT_TAG may not be the reserved channel '$reserved'" >&2
+          return 1
+        fi
+      done
+      if git rev-parse -q --verify "refs/tags/${RELEASE_TAG_PREFIX:-v}${primary}" >/dev/null; then
+        echo "prepare-image-tags: INPUT_TAG '$primary' names an ALREADY RELEASED version" >&2
+        echo "  (${RELEASE_TAG_PREFIX:-v}${primary} exists). Publishing it here would move a released" >&2
+        echo "  name onto different code — the exact failure this gate exists to prevent." >&2
+        return 1
+      fi
+    fi
     if [ -z "$primary" ]; then
       if [ "${VERSION_SOURCE:-file}" = "allocated" ]; then
         # An upstream job allocated this version FOR THIS RUN, so the version is
@@ -84,7 +117,7 @@ emit_tags() {
       [ "$primary" = "$version" ] || tags="${tags},${image_base}:${version}"
       tags="${tags},${image_base}:test"
     elif [ "${VERSION_SOURCE:-file}" = "allocated" ] \
-         || ! git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+         || ! git rev-parse -q --verify "refs/tags/${RELEASE_TAG_PREFIX:-v}${version}" >/dev/null; then
       # Two genuinely different situations, not one with an exception:
       #
       #   file      — the version is read from a checked-in VERSION file, so
@@ -110,13 +143,22 @@ emit_tags() {
     # names like the rest, so they are appended HERE and never on the branch
     # path — a branch build must not create a name that claims a version it
     # did not release.
-    if [ -n "${EXTRA_TAGS:-}" ]; then
+    # 🔴 DONMUS durumda ek ad EKLENMEZ. Olculdu: `EXTRA_TAGS=latest`, yayimlanmis
+    # semver dondurulmusken `:latest`i yine basiyordu -- donmayi tam da onu
+    # korumak icin koydugumuz yerden deliyordu.
+    if [ -n "${EXTRA_TAGS:-}" ] && [ "$released" != true ]; then
       local extra rest
       rest="$EXTRA_TAGS"
       while [ -n "$rest" ]; do
         extra="${rest%%,*}"
         [ "$extra" = "$rest" ] && rest="" || rest="${rest#*,}"
         extra="$(printf '%s' "$extra" | tr -d '[:space:]')"
+        # Ayrilmis kanal adlari EXTRA_TAGS uzerinden gecemez.
+        case "$extra" in
+          latest|test)
+            echo "prepare-image-tags: EXTRA_TAGS may not contain the reserved channel '$extra'" >&2
+            return 1 ;;
+        esac
         [ -n "$extra" ] && tags="${tags},${image_base}:${extra}"
       done
     fi
@@ -176,8 +218,14 @@ selftest() {
     )
   }
 
+  # 🪤 _check ve _refute AYNI eslestiriciyi kullanir. Ayri grep cagrilari
+  # tutulursa _refute'nin grep'i bozulunca 17 negatif iddia SESSIZCE gecer ve
+  # suit yine "0 failed" der (olculdu: mutasyon M-A, 53/0 rc=0). Tek eslestirici,
+  # _check'in pozitif kontrolleriyle birlikte kendini de dogrular.
+  _match() { printf '%s' "$2" | grep -qF -- "$1"; }
+
   _check() { # _check <case> <description> <expect-substring> <haystack>
-    if printf '%s' "$4" | grep -qF -- "$3"; then
+    if _match "$3" "$4"; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))
@@ -187,7 +235,7 @@ selftest() {
   }
 
   _refute() { # _refute <case> <description> <forbidden-substring> <haystack>
-    if printf '%s' "$4" | grep -qF -- "$3"; then
+    if _match "$3" "$4"; then
       fail=$((fail + 1))
       printf '  FAIL  %s: must NOT contain %s\n' "$1: $2" "$3" >&2
       printf '        got: %s\n' "$(printf '%s' "$4" | tr '\n' ' ')" >&2
@@ -332,6 +380,61 @@ selftest() {
   # yukaridaki "latest yok" iddiasi bos bir dizgeyi olcuyor olabilirdi.
   out="$(TAG_STYLE=docker-args _run docker-args-main 0.2.0 - refs/heads/main main '')"
   _check  DOCKER-ARGS-MAIN 'main cok etiketli'      '-t reg.example.invalid/sb/app:latest' "$out"
+
+  # ---- 3. GÖZ BULGULARI: aşağıdaki her vaka ÖLÇÜLMÜŞ bir deliği çiviler ----
+
+  # MAIN-PREFIX — `main` ile BASLAYAN ama `main` OLMAYAN ref. Betik bunu zaten
+  # dogru yapiyordu, ama hicbir test civilemiyordu: onek eslesmesine ceviren
+  # mutant 53/0 ile HAYATTA kaliyordu.
+  # INPUT_TAG olarak ZARARSIZ bir ad veriliyor: `latest` verilseydi onek-mutantı
+  # main koluna dusup ayrilmis-kanal reddine takilir ve suit COKEREK olurdu --
+  # yakalanirdi ama gerekcesi "iddia dustu" degil "cokti" olurdu.
+  out="$(_run main-prefix 0.2.0 - refs/heads/main-yedek main-yedek hotfix9)"
+  _refute MAIN-PREFIX ':latest BASILMAZ'            'sb/app:latest' "$out"
+  _refute MAIN-PREFIX ':<surum> BASILMAZ'           'sb/app:0.2.0'  "$out"
+  _check  MAIN-PREFIX 'dal etiketine duser'         'sb/app:br-main-yedek-abcdef1' "$out"
+
+  # TAG-LEN — uzun dal adi etiket sinirini asmamali (128). Kirpmayi kaldiran
+  # mutant da testsizdi.
+  out="$(_run tag-len 0.2.0 - refs/heads/$(printf 'x%.0s' $(seq 1 90)) "$(printf 'x%.0s' $(seq 1 90))" '')"
+  if [ "$(printf '%s' "$out" | sed -n 's/^primary_tag=//p' | wc -c)" -le 80 ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1)); printf '  FAIL  TAG-LEN: birincil etiket cok uzun\n' >&2
+  fi
+
+  # INPUT-TAG-RELEASED — bu dosyanin basliginda "kapattik" yazan 1. KAPI.
+  out="$(_run input-released 0.2.0 v0.9.9 refs/heads/main main 0.9.9 2>&1 || true)"
+  _check  INPUT-RELEASED 'yayimlanmis surum REDDEDILIR' 'ALREADY RELEASED' "$out"
+  _refute INPUT-RELEASED 'etiket URETILMEZ'             'tags=' "$out"
+  # POZITIF KONTROL: yayimlanmamis bir INPUT_TAG hala GECMELI, yoksa yukaridaki
+  # iddia "her INPUT_TAG'i reddet" ile de gecerdi.
+  out="$(_run input-free 0.2.0 - refs/heads/main main hotfix9)"
+  _check INPUT-FREE 'yayimlanmamis override gecer'  'primary_tag=hotfix9' "$out"
+
+  # INPUT-TAG-RESERVED / INJECTION
+  out="$(_run input-reserved 0.2.0 - refs/heads/main main latest 2>&1 || true)"
+  _check INPUT-RESERVED 'ayrilmis kanal REDDEDILIR'  'reserved channel' "$out"
+  out="$(_run input-comma 0.2.0 - refs/heads/main main 'x,reg.example.invalid/sb/app:latest' 2>&1 || true)"
+  _check  INPUT-COMMA 'virgul enjeksiyonu REDDEDILIR' 'single tag' "$out"
+  # 🪤 Burada 'sb/app:latest' aramak YANLIS olurdu: ret MESAJI reddedilen girdiyi
+  # yankiliyor ve arama ona takiliyor. Dogru iddia: hic etiket URETILMEDI.
+  _refute INPUT-COMMA 'hic etiket uretilmedi'         'tags=' "$out"
+
+  # EXTRA-TAGS-FROZEN — donmus durumda ek ad EKLENMEZ.
+  out="$(EXTRA_TAGS=qa _run extra-frozen 0.2.0 v0.2.0 refs/heads/main main '')"
+  _refute EXTRA-FROZEN 'donmusken ek ad YOK'        'sb/app:qa'     "$out"
+  _check  EXTRA-FROZEN 'yalniz birincil'            'tags=reg.example.invalid/sb/app:abcdef1' "$out"
+  out="$(EXTRA_TAGS=latest _run extra-reserved 0.2.0 - refs/heads/main main '' 2>&1 || true)"
+  _check EXTRA-RESERVED 'EXTRA_TAGS ayrilmis ad REDDEDILIR' 'reserved channel' "$out"
+
+  # RELEASE-TAG-PREFIX — ikinci imajin KENDI release ad-uzayi. Onek olmadan
+  # reconciler, gateway'in v<surum> uzayina bakip hic yapmadigi bir release
+  # yuzunden dondurulurdu.
+  out="$(RELEASE_TAG_PREFIX=eip-reconciler-v _run prefix 0.2.0 v0.2.0 refs/heads/main main '')"
+  _check  RELEASE-PREFIX 'baska uzaydaki tag DONDURMAZ' 'sb/app:latest' "$out"
+  out="$(RELEASE_TAG_PREFIX=eip-reconciler-v _run prefix2 0.2.0 eip-reconciler-v0.2.0 refs/heads/main main '')"
+  _refute RELEASE-PREFIX2 'KENDI uzayindaki tag DONDURUR' 'sb/app:latest' "$out"
 
   printf '=== prepare-image-tags --selftest: %d passed, %d failed ===\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
