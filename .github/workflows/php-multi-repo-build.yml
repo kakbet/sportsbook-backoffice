@@ -278,6 +278,13 @@ jobs:
 
       - name: Prepare Tags
         id: tags
+        # 🪤 working-directory: bu workflow orkestrator depoyu `main/` ALT DIZINE
+        # checkout ediyor (Checkout Main Orchestrator Repo, path: main), yani
+        # script is kokunde DEGIL. Olculdu: bu satir olmadan kosum
+        # `./scripts/ci/prepare-image-tags.sh: No such file or directory`,
+        # rc 127 verdi. Create Dockerfile ve Build and Push adimlari da ayni
+        # dizini kullaniyor.
+        working-directory: main
         # 🔴 `:latest` was pushed on EVERY build. The calling pipeline accepts
         # workflow_dispatch from ANY ref, so a branch run republished the
         # production `:latest` of sb/sportsbook-backoffice from branch code.
