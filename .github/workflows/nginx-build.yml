@@ -192,18 +192,40 @@ jobs:
 
       - name: Prepare Tags
         id: tags
-        run: |
-          IMAGE_BASE="${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}"
-          TAGS="-t ${IMAGE_BASE}:${{ inputs.version }} -t ${IMAGE_BASE}:latest"
-          
-          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+        # 🔴🔴 THIS IS THE HOLE THAT ACTUALLY FIRED. The caller invokes TWO build
+        # workflows — php-multi-repo-build.yml and this one — and only the first
+        # was fenced. Measured: three branch dispatches (34744094370,
+        # 34746482223, 34746648832) each published sb/sportsbook-nginx:<version>
+        # AND :latest from branch code, moving the production `latest` off
+        # 4.2.121 onto a 4.2.122 that main never released
+        # (`git ls-remote --tags origin refs/tags/v4.2.122` => 0). No running
+        # workload was affected — the cluster pins :4.2.121 — but the tag moved,
+        # which is exactly what this campaign exists to prevent.
+        #
+        # 🔑 Lesson: fencing "the build workflow" is not enough when a caller
+        # has more than one.
+        #
+        # working-directory: the orchestrator repo is checked out into `main/`
+        # (Checkout Main Repository, path: main), so the script is not at the
+        # job root.
+        env:
+          ECR_REGISTRY: ${{ inputs.ecr_registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr_repository }}
+          VERSION_VALUE: ${{ inputs.version }}
+          VERSION_SOURCE: allocated
+          TAG_STYLE: docker-args
+        working-directory: main
+        run: ./scripts/ci/prepare-image-tags.sh >> "$GITHUB_OUTPUT"
 
       - name: Build and Push Nginx Docker Image
         id: build
         run: |
           echo "🌐 Building and pushing Sportsbook Nginx Docker image..."
           
-          IMAGE_URL="${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }}"
+          # The PUBLISHED name: off the default branch the fence withholds
+          # :<version>, so a URL built from it would name an image this run
+          # never pushed.
+          IMAGE_URL="${{ steps.tags.outputs.image_url }}"
           
           docker buildx build \
             --push \
@@ -211,7 +233,7 @@ jobs:
             --progress=plain \
             --network=host \
             ${{ steps.build-args.outputs.build_args }} \
-            ${{ steps.tags.outputs.tags }} \
+            ${{ steps.tags.outputs.docker_args }} \
             ${{ steps.labels.outputs.labels }} \
             -f ${{ inputs.dockerfile_path }} \
             ${{ inputs.build_context }}
