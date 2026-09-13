@@ -193,7 +193,7 @@ emit_tags() {
 # tags, so the production `git rev-parse` path is exercised verbatim — there
 # is no test-only branch in the code above to drift away from it.
 selftest() {
-  local pass=0 fail=0 sandbox
+  local pass=0 fail=0 sandbox _rc _longref
   sandbox="$(mktemp -d)"
   trap 'rm -rf "$sandbox"' RETURN
 
@@ -241,6 +241,32 @@ selftest() {
       printf '        got: %s\n' "$(printf '%s' "$4" | tr '\n' ' ')" >&2
     else
       pass=$((pass + 1))
+    fi
+  }
+
+  # 🔴 TUR 3 BULGUSU — ALTI mutant bu yuzden hayatta kaldi (M2 released-guard,
+  # M11 comma, M12 reserved, M13 empty-version, M14 EXTRA reserved,
+  # M15 illegal-char). Hepsi TEK kok neden: ret vakalari `|| true` ile
+  # cagriliyordu ve suit yalnizca STDOUT'a bakiyordu. Yani bir ret yolunun
+  # `return 1`i `return 0`a donse iddia yine gecerdi.
+  #
+  # Bunun CI'daki karsiligi sessiz bir yesil: cagiranlar betigi
+  # `run: ./scripts/ci/prepare-image-tags.sh >> "$GITHUB_OUTPUT"` diye
+  # kosuyor; rc 0 donerse adim YESIL gecer ama `tags=` hic yazilmaz ve
+  # asagi akista etiketsiz bir build'e donusur.
+  #
+  # 🔑 Ret yolunun iddiasi MESAJ DEGIL, CIKIS KODUDUR. Mesaj degisebilir;
+  # sozlesme rc'dir.
+  _runrc() { # _runrc <_run argumanlari> — `out` ve `_rc` degiskenlerini doldurur
+    _rc=0
+    out="$(_run "$@" 2>&1)" || _rc=$?
+  }
+  _rc_is() { # _rc_is <case> <description> <beklenen-rc>
+    if [ "$_rc" = "$3" ]; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      printf '  FAIL  %s: cikis kodu %s olmali, %s geldi\n' "$1: $2" "$3" "$_rc" >&2
     fi
   }
 
@@ -396,7 +422,11 @@ selftest() {
 
   # TAG-LEN — uzun dal adi etiket sinirini asmamali (128). Kirpmayi kaldiran
   # mutant da testsizdi.
-  out="$(_run tag-len 0.2.0 - refs/heads/$(printf 'x%.0s' $(seq 1 90)) "$(printf 'x%.0s' $(seq 1 90))" '')"
+  # 🪤 SC2046: `$(seq ...)` tirnaksiz birakilmisti (bu oturumda ben ekledim).
+  # Uzun adi bir degiskende uretip tirnakli gecmek hem lint'i kapatir hem de
+  # ayni dizgenin iki kez uretilmesini onler.
+  _longref="$(printf 'x%.0s' $(seq 1 90))"
+  out="$(_run tag-len 0.2.0 - "refs/heads/$_longref" "$_longref" '')"
   if [ "$(printf '%s' "$out" | sed -n 's/^primary_tag=//p' | wc -c)" -le 80 ]; then
     pass=$((pass+1))
   else
@@ -404,19 +434,25 @@ selftest() {
   fi
 
   # INPUT-TAG-RELEASED — bu dosyanin basliginda "kapattik" yazan 1. KAPI.
-  out="$(_run input-released 0.2.0 v0.9.9 refs/heads/main main 0.9.9 2>&1 || true)"
+  _runrc input-released 0.2.0 v0.9.9 refs/heads/main main 0.9.9
   _check  INPUT-RELEASED 'yayimlanmis surum REDDEDILIR' 'ALREADY RELEASED' "$out"
   _refute INPUT-RELEASED 'etiket URETILMEZ'             'tags=' "$out"
+  _rc_is  INPUT-RELEASED 'cikis kodu 1' 1
   # POZITIF KONTROL: yayimlanmamis bir INPUT_TAG hala GECMELI, yoksa yukaridaki
   # iddia "her INPUT_TAG'i reddet" ile de gecerdi.
-  out="$(_run input-free 0.2.0 - refs/heads/main main hotfix9)"
+  _runrc input-free 0.2.0 - refs/heads/main main hotfix9
   _check INPUT-FREE 'yayimlanmamis override gecer'  'primary_tag=hotfix9' "$out"
+  # 🪤 rc=0 POZITIF KONTROLU: bu olmadan "rc 1 bekle" iddialari, betik HER
+  # girdide 1 dondurse bile gecerdi.
+  _rc_is INPUT-FREE 'basarili yol rc=0' 0
 
   # INPUT-TAG-RESERVED / INJECTION
-  out="$(_run input-reserved 0.2.0 - refs/heads/main main latest 2>&1 || true)"
+  _runrc input-reserved 0.2.0 - refs/heads/main main latest
   _check INPUT-RESERVED 'ayrilmis kanal REDDEDILIR'  'reserved channel' "$out"
-  out="$(_run input-comma 0.2.0 - refs/heads/main main 'x,reg.example.invalid/sb/app:latest' 2>&1 || true)"
+  _rc_is INPUT-RESERVED 'cikis kodu 1' 1
+  _runrc input-comma 0.2.0 - refs/heads/main main 'x,reg.example.invalid/sb/app:latest'
   _check  INPUT-COMMA 'virgul enjeksiyonu REDDEDILIR' 'single tag' "$out"
+  _rc_is  INPUT-COMMA 'cikis kodu 1' 1
   # 🪤 Burada 'sb/app:latest' aramak YANLIS olurdu: ret MESAJI reddedilen girdiyi
   # yankiliyor ve arama ona takiliyor. Dogru iddia: hic etiket URETILMEDI.
   _refute INPUT-COMMA 'hic etiket uretilmedi'         'tags=' "$out"
@@ -425,8 +461,27 @@ selftest() {
   out="$(EXTRA_TAGS=qa _run extra-frozen 0.2.0 v0.2.0 refs/heads/main main '')"
   _refute EXTRA-FROZEN 'donmusken ek ad YOK'        'sb/app:qa'     "$out"
   _check  EXTRA-FROZEN 'yalniz birincil'            'tags=reg.example.invalid/sb/app:abcdef1' "$out"
-  out="$(EXTRA_TAGS=latest _run extra-reserved 0.2.0 - refs/heads/main main '' 2>&1 || true)"
+  EXTRA_TAGS=latest _runrc extra-reserved 0.2.0 - refs/heads/main main ''
   _check EXTRA-RESERVED 'EXTRA_TAGS ayrilmis ad REDDEDILIR' 'reserved channel' "$out"
+  _rc_is EXTRA-RESERVED 'cikis kodu 1' 1
+
+  # 🔴 TUR 3'te EKLENEN UC YENI VAKA — bu ret yollarinin HIC iddiasi yoktu
+  # (mutant M13/M15 hayatta kalmisti). Kapilar calisiyordu; eksik olan testti.
+  _runrc empty-version '' - refs/heads/main main ''
+  _check EMPTY-VERSION 'bos VERSION REDDEDILIR' 'version is empty' "$out"
+  _refute EMPTY-VERSION 'hic etiket uretilmedi' 'tags=' "$out"
+  _rc_is EMPTY-VERSION 'cikis kodu 1' 1
+
+  _runrc input-badfirst 0.2.0 - refs/heads/main main '-dash'
+  _check INPUT-BADFIRST 'ilk karakter harf/rakam DEGILSE REDDEDILIR' 'not a legal image tag' "$out"
+  _rc_is INPUT-BADFIRST 'cikis kodu 1' 1
+
+  _runrc input-badchar 0.2.0 - refs/heads/main main 'a/b'
+  # 🪤 Ilk yazisimda burada 'not a legal image tag' bekledim ve suit BUNU YAKALADI:
+  # 'a/b' ILK KARAKTER kapisini gecer (a harf), KARAKTER-KUMESI kapisina takilir.
+  # Iki AYRI ret yolu, iki AYRI mesaj — testin degeri tam da bu ayrimi tutmasi.
+  _check INPUT-BADCHAR 'izinsiz karakter REDDEDILIR' 'characters outside' "$out"
+  _rc_is INPUT-BADCHAR 'cikis kodu 1' 1
 
   # RELEASE-TAG-PREFIX — ikinci imajin KENDI release ad-uzayi. Onek olmadan
   # reconciler, gateway'in v<surum> uzayina bakip hic yapmadigi bir release
