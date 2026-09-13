@@ -306,6 +306,24 @@ selftest() {
   _refute EXTRA-TAGS-BRANCH 'dalda ek etiket YOK'   'sb/app:node18-0.2.0' "$out"
   _check  EXTRA-TAGS-BRANCH 'yalniz dal etiketi'    'tags=reg.example.invalid/sb/app:br-topic-abcdef1' "$out"
 
+  # ALT-DEFAULT-BRANCH — this script is called by reusable workflows with MORE
+  # THAN ONE caller: a main pipeline publishing from `main`, and a test
+  # pipeline publishing the `:test` channel from `test`. Treating `main` as
+  # the only publishing branch silently stopped the second caller from
+  # publishing the very tags its own deploy job pins, which is an
+  # ImagePullBackOff on the next push to that branch. The pair below is the
+  # proof: the SAME ref publishes the channel under its own default branch and
+  # is fenced under the other one.
+  out="$(DEFAULT_BRANCH=test VERSION_VALUE=9.9.9-test-1 TEST_MARKER=-test- VERSION_SOURCE=allocated \
+    _run alt-default 0.2.0 - refs/heads/test test '')"
+  _check ALT-DEFAULT 'kendi dalinda kanal yayimlanir' 'sb/app:test'      "$out"
+  _check ALT-DEFAULT 'surum etiketi de yayimlanir'    'sb/app:9.9.9-test-1' "$out"
+  _check ALT-DEFAULT 'is_main dogru'                  'is_main=true'    "$out"
+  out="$(DEFAULT_BRANCH=main VERSION_VALUE=9.9.9-test-1 TEST_MARKER=-test- VERSION_SOURCE=allocated \
+    _run alt-default-b 0.2.0 - refs/heads/test test '')"
+  _refute ALT-DEFAULT-OTHER 'baska varsayilanda kanal YOK' 'sb/app:test' "$out"
+  _check  ALT-DEFAULT-OTHER 'dal etiketine duser'          'sb/app:br-test-abcdef1' "$out"
+
   # DOCKER-ARGS — same decision, -t spelling.
   out="$(TAG_STYLE=docker-args _run docker-args 0.2.0 - refs/heads/topic topic '')"
   _check  DOCKER-ARGS '-t bayragi uretilir'         'docker_args=-t reg.example.invalid/sb/app:br-topic-abcdef1' "$out"
