@@ -67,6 +67,7 @@ on:
 jobs:
   nginx-build:
     runs-on: [self-hosted, Linux]
+    timeout-minutes: 60
     
     outputs:
       image_url: ${{ steps.build.outputs.image_url }}
@@ -258,14 +259,16 @@ jobs:
       - name: Generate Nginx Build Report
         if: success()
         run: |
-          echo "## 🌐 Nginx Multi-Repository Build Report" >> nginx_build_report.md
-          echo "- **Image**: ${{ steps.build.outputs.image_url }}" >> nginx_build_report.md
-          echo "- **Nginx Version**: ${{ inputs.nginx_version }}" >> nginx_build_report.md
-          echo "- **Super Branch**: ${{ inputs.super_branch }}" >> nginx_build_report.md
-          echo "- **Platforms**: ${{ inputs.platforms }}" >> nginx_build_report.md
-          echo "- **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> nginx_build_report.md
-          echo "- **Git Commit**: ${{ github.sha }}" >> nginx_build_report.md
-          echo "- **Configuration**: Custom nginx + conf.d setup" >> nginx_build_report.md
+          {
+            echo "## 🌐 Nginx Multi-Repository Build Report"
+            echo "- **Image**: ${{ steps.build.outputs.image_url }}"
+            echo "- **Nginx Version**: ${{ inputs.nginx_version }}"
+            echo "- **Super Branch**: ${{ inputs.super_branch }}"
+            echo "- **Platforms**: ${{ inputs.platforms }}"
+            echo "- **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "- **Git Commit**: ${{ github.sha }}"
+            echo "- **Configuration**: Custom nginx + conf.d setup"
+          } > nginx_build_report.md
 
       - name: Upload Nginx Build Report
         if: success()

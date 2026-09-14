@@ -80,6 +80,7 @@ jobs:
   # 1. Pre-build validation
   pre-build-validation:
     runs-on: [self-hosted, Linux]
+    timeout-minutes: 15
     outputs:
       should_build: ${{ steps.changes.outputs.should_build }}
       
@@ -316,6 +317,7 @@ jobs:
   # 6. Final Summary
   pipeline-summary:
     runs-on: [self-hosted, Linux]
+    timeout-minutes: 10
     needs: [pre-build-validation, version-management, php-multi-build, create-release, send-notifications]
     if: always()
     

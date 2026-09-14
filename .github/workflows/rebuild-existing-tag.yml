@@ -37,6 +37,7 @@ jobs:
   validate-and-extract:
     name: Validate Tag and Extract Version
     runs-on: [self-hosted, Linux]
+    timeout-minutes: 15
     outputs:
       version: ${{ steps.extract.outputs.version }}
       tag_exists: ${{ steps.validate.outputs.tag_exists }}
@@ -165,6 +166,7 @@ jobs:
   rebuild-summary:
     name: Rebuild Summary
     runs-on: [self-hosted, Linux]
+    timeout-minutes: 10
     needs: [validate-and-extract, php-rebuild, nginx-rebuild]
     if: always()
     

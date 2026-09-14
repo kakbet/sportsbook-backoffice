@@ -91,6 +91,7 @@ jobs:
     # vendor/autoload.php VAR. GitHub-hosted isler 2026-09-13 17:39Z ve 18:59Z'de
     # faturalama engeline takildi (is HIC baslamadi).
     runs-on: [self-hosted, Linux]
+    timeout-minutes: 60
     
     outputs:
       image_url: ${{ steps.build.outputs.image_url }}
@@ -313,14 +314,16 @@ jobs:
       - name: Generate Build Report
         if: success()
         run: |
-          echo "## 🐘 PHP Multi-Repository Build Report" >> build_report.md
-          echo "- **Image**: ${{ steps.build.outputs.image_url }}" >> build_report.md
-          echo "- **PHP Version**: ${{ inputs.php_version }}" >> build_report.md
-          echo "- **Super Branch**: ${{ inputs.super_branch }}" >> build_report.md
-          echo "- **PGF Branch**: ${{ inputs.pgf_branch }}" >> build_report.md
-          echo "- **PGLib Branch**: ${{ inputs.pglib_branch }}" >> build_report.md
-          echo "- **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> build_report.md
-          echo "- **Git Commit**: ${{ github.sha }}" >> build_report.md
+          {
+            echo "## 🐘 PHP Multi-Repository Build Report"
+            echo "- **Image**: ${{ steps.build.outputs.image_url }}"
+            echo "- **PHP Version**: ${{ inputs.php_version }}"
+            echo "- **Super Branch**: ${{ inputs.super_branch }}"
+            echo "- **PGF Branch**: ${{ inputs.pgf_branch }}"
+            echo "- **PGLib Branch**: ${{ inputs.pglib_branch }}"
+            echo "- **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "- **Git Commit**: ${{ github.sha }}"
+          } > build_report.md
 
       - name: Upload Build Report
         if: success()
