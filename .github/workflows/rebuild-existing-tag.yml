@@ -36,7 +36,7 @@ jobs:
   # 1. Validate and Extract Version
   validate-and-extract:
     name: Validate Tag and Extract Version
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     outputs:
       version: ${{ steps.extract.outputs.version }}
       tag_exists: ${{ steps.validate.outputs.tag_exists }}
@@ -164,7 +164,7 @@ jobs:
   # 4. Summary
   rebuild-summary:
     name: Rebuild Summary
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     needs: [validate-and-extract, php-rebuild, nginx-rebuild]
     if: always()
     

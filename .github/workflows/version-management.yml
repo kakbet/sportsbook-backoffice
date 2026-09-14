@@ -31,7 +31,7 @@ on:
 
 jobs:
   version-management:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}

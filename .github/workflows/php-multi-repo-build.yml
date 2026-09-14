@@ -89,7 +89,7 @@ jobs:
     # degil. Cift mimari de burada kanitli: nginx-build ayni havuzda
     # sb/sportsbook-nginx'i cift mimari basiyor (GitHub-hosted imajlarda
     # binfmt kayitli gelir).
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     
     outputs:
       image_url: ${{ steps.build.outputs.image_url }}

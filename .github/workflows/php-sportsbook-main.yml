@@ -79,7 +79,7 @@ permissions:
 jobs:
   # 1. Pre-build validation
   pre-build-validation:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     outputs:
       should_build: ${{ steps.changes.outputs.should_build }}
       
@@ -315,7 +315,7 @@ jobs:
 
   # 6. Final Summary
   pipeline-summary:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     needs: [pre-build-validation, version-management, php-multi-build, create-release, send-notifications]
     if: always()
     
