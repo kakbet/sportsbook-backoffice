@@ -52,7 +52,8 @@ on:
 
 jobs:
   create-release:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 15
     # BU SATIRI KALDIR - Sınırlayıcı koşul
     # if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     

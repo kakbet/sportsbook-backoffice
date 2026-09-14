@@ -48,7 +48,8 @@ on:
 
 jobs:
   slack-notification:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 10
     
     steps:
       - name: Check Slack Token
@@ -155,7 +156,8 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
   discord-notification:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 10
     
     steps:
       - name: Check Discord Webhook
@@ -207,7 +209,8 @@ jobs:
                ${{ secrets.DISCORD_WEBHOOK }}
 
   teams-notification:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 10
     
     steps:
       - name: Check Teams Webhook

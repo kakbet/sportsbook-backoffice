@@ -66,7 +66,8 @@ on:
 
 jobs:
   nginx-build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 60
     
     outputs:
       image_url: ${{ steps.build.outputs.image_url }}
@@ -108,6 +109,20 @@ jobs:
           echo "Cleaning .git directories..."
           rm -rf www/.git
           echo "Cleanup completed"
+
+      # 🪤 ORDER: isolate BEFORE buildx. buildx keeps builder state under
+      # $DOCKER_CONFIG/buildx; isolate later and the builder lands in the
+      # SHARED directory while the build looks in the isolated one.
+      # WHY: every runner on this host shares HOME, so one ~/.docker/config.json
+      # is shared state between concurrent jobs and amazon-ecr-login's post step
+      # DELETES the credentials it wrote — measured in a sibling repo as a
+      # `401 Unauthorized` on the push of an already-built image.
+      - name: Isolate Docker config for this job
+        run: |
+          cfg="$RUNNER_TEMP/docker-$GITHUB_RUN_ID-$GITHUB_JOB"
+          mkdir -p "$cfg"
+          echo '{}' > "$cfg/config.json"
+          echo "DOCKER_CONFIG=$cfg" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -192,18 +207,40 @@ jobs:
 
       - name: Prepare Tags
         id: tags
-        run: |
-          IMAGE_BASE="${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}"
-          TAGS="-t ${IMAGE_BASE}:${{ inputs.version }} -t ${IMAGE_BASE}:latest"
-          
-          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+        # 🔴🔴 THIS IS THE HOLE THAT ACTUALLY FIRED. The caller invokes TWO build
+        # workflows — php-multi-repo-build.yml and this one — and only the first
+        # was fenced. Measured: three branch dispatches (34744094370,
+        # 34746482223, 34746648832) each published sb/sportsbook-nginx:<version>
+        # AND :latest from branch code, moving the production `latest` off
+        # 4.2.121 onto a 4.2.122 that main never released
+        # (`git ls-remote --tags origin refs/tags/v4.2.122` => 0). No running
+        # workload was affected — the cluster pins :4.2.121 — but the tag moved,
+        # which is exactly what this campaign exists to prevent.
+        #
+        # 🔑 Lesson: fencing "the build workflow" is not enough when a caller
+        # has more than one.
+        #
+        # working-directory: the orchestrator repo is checked out into `main/`
+        # (Checkout Main Repository, path: main), so the script is not at the
+        # job root.
+        env:
+          ECR_REGISTRY: ${{ inputs.ecr_registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr_repository }}
+          VERSION_VALUE: ${{ inputs.version }}
+          VERSION_SOURCE: allocated
+          TAG_STYLE: docker-args
+        working-directory: main
+        run: ./scripts/ci/prepare-image-tags.sh >> "$GITHUB_OUTPUT"
 
       - name: Build and Push Nginx Docker Image
         id: build
         run: |
           echo "🌐 Building and pushing Sportsbook Nginx Docker image..."
           
-          IMAGE_URL="${{ inputs.ecr_registry }}/${{ inputs.ecr_repository }}:${{ inputs.version }}"
+          # The PUBLISHED name: off the default branch the fence withholds
+          # :<version>, so a URL built from it would name an image this run
+          # never pushed.
+          IMAGE_URL="${{ steps.tags.outputs.image_url }}"
           
           docker buildx build \
             --push \
@@ -211,7 +248,7 @@ jobs:
             --progress=plain \
             --network=host \
             ${{ steps.build-args.outputs.build_args }} \
-            ${{ steps.tags.outputs.tags }} \
+            ${{ steps.tags.outputs.docker_args }} \
             ${{ steps.labels.outputs.labels }} \
             -f ${{ inputs.dockerfile_path }} \
             ${{ inputs.build_context }}
@@ -222,14 +259,16 @@ jobs:
       - name: Generate Nginx Build Report
         if: success()
         run: |
-          echo "## 🌐 Nginx Multi-Repository Build Report" >> nginx_build_report.md
-          echo "- **Image**: ${{ steps.build.outputs.image_url }}" >> nginx_build_report.md
-          echo "- **Nginx Version**: ${{ inputs.nginx_version }}" >> nginx_build_report.md
-          echo "- **Super Branch**: ${{ inputs.super_branch }}" >> nginx_build_report.md
-          echo "- **Platforms**: ${{ inputs.platforms }}" >> nginx_build_report.md
-          echo "- **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> nginx_build_report.md
-          echo "- **Git Commit**: ${{ github.sha }}" >> nginx_build_report.md
-          echo "- **Configuration**: Custom nginx + conf.d setup" >> nginx_build_report.md
+          {
+            echo "## 🌐 Nginx Multi-Repository Build Report"
+            echo "- **Image**: ${{ steps.build.outputs.image_url }}"
+            echo "- **Nginx Version**: ${{ inputs.nginx_version }}"
+            echo "- **Super Branch**: ${{ inputs.super_branch }}"
+            echo "- **Platforms**: ${{ inputs.platforms }}"
+            echo "- **Build Date**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "- **Git Commit**: ${{ github.sha }}"
+            echo "- **Configuration**: Custom nginx + conf.d setup"
+          } > nginx_build_report.md
 
       - name: Upload Nginx Build Report
         if: success()
