@@ -80,15 +80,16 @@ on:
 
 jobs:
   php-multi-build:
-    # 🪤 GERI ALINDI. Bunu self-hosted'a tasimistim, ama OLCULDU (kosum
-    # 34744094370): `Setup PHP` adimi orada 56 DAKIKA asili kaldi --
-    # shivammathur/setup-php PHP'yi sistem geneline kurmaya calisiyor ve
-    # paylasik host'ta ilerlemiyor. Tasima zaten GEREKSIZDI: AYNI kosumda
-    # pre-build-validation, version-management ve nginx-build isleri
-    # ubuntu-latest uzerinde BASARIYLA kostu, yani bu depo kota-bloklu
-    # degil. Cift mimari de burada kanitli: nginx-build ayni havuzda
-    # sb/sportsbook-nginx'i cift mimari basiyor (GitHub-hosted imajlarda
-    # binfmt kayitli gelir).
+    # self-hosted: host'a PHP KURULMAZ. Onceki denemede (kosum 34744094370)
+    # shivammathur/setup-php paylasik host'ta 56 DAKIKA asili kaldi ve is
+    # ubuntu-latest'e geri alinmisti. Kok neden: PHP host'ta YALNIZ
+    # `composer install` icin kuruluyordu. Composer artik Dockerfile'in builder
+    # asamasinda, taban imajin (sb/sportsbook-php-fpm: Composer 2.7.6, PHP 8.3.8)
+    # icinde, her hedef platform icin kosuyor. Olculdu 2026-09-14 (davinci,
+    # docker buildx, taban 1.0.3, PGF composer.json+lock): linux/amd64 ve
+    # linux/arm64 -> check-platform-reqs success, composer install rc 0,
+    # vendor/autoload.php VAR. GitHub-hosted isler 2026-09-13 17:39Z ve 18:59Z'de
+    # faturalama engeline takildi (is HIC baslamadi).
     runs-on: [self-hosted, Linux]
     
     outputs:
@@ -127,13 +128,6 @@ jobs:
           ref: ${{ inputs.pglib_branch }}
           path: PGLib
 
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ inputs.php_version }}
-          extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_mysql, dom, filter, gd, json
-          tools: composer:v2
-
       - name: Prepare Project Structure
         run: |
           echo "Setting up project structure..."
@@ -148,15 +142,6 @@ jobs:
           
           echo "Project structure ready:"
           ls -la main/build/
-
-      - name: Install Composer Dependencies
-        working-directory: main/build/PGF
-        run: |
-          echo "Installing PGF dependencies..."
-          composer install --no-dev --optimize-autoloader --no-interaction
-          
-          echo "Composer install completed"
-          ls -la vendor/ || echo "No vendor directory created"
 
       - name: Clean Git Directories
         working-directory: main/build
@@ -221,10 +206,11 @@ jobs:
           COPY build/PGLib /home/www-data/lib/PGLib
           COPY build/PGF /home/www-data/lib/PGF
           
-          # Ensure composer dependencies are installed
-          RUN if [ -f "/home/www-data/lib/PGF/composer.json" ] && [ ! -d "/home/www-data/lib/PGF/vendor" ]; then \
-                composer install --working-dir=/home/www-data/lib/PGF --no-dev --optimize-autoloader; \
-              fi
+          # Composer dependencies are installed HERE, inside the image, for every
+          # target platform. The runner no longer needs PHP (see the job comment).
+          # Fail-closed: an image without PGF's vendor/ must not be published.
+          RUN composer install --working-dir=/home/www-data/lib/PGF --no-dev --optimize-autoloader --no-interaction \
+              && test -f /home/www-data/lib/PGF/vendor/autoload.php
           
           # Create sessions directory
           RUN mkdir -p www/.sessions
