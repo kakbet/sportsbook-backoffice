@@ -172,6 +172,7 @@ jobs:
           fi
 
       - name: Archive Version File
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: version-file-${{ steps.version.outputs.new_version }}
