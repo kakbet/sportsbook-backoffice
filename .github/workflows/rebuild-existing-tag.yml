@@ -128,6 +128,13 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      # A reusable workflow does NOT inherit these: the declaration in the
+      # called file and this line are two halves of one mechanism. Missing
+      # either half makes the token the EMPTY STRING there, the Harbor login
+      # throws, and since that login runs BEFORE the build the ECR push is
+      # lost with it.
+      HARBOR_ROBOT_USER: ${{ secrets.HARBOR_ROBOT_USER }}
+      HARBOR_ROBOT_TOKEN: ${{ secrets.HARBOR_ROBOT_TOKEN }}
 
   # 3. Rebuild Nginx
   nginx-rebuild:
@@ -161,6 +168,13 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      # A reusable workflow does NOT inherit these: the declaration in the
+      # called file and this line are two halves of one mechanism. Missing
+      # either half makes the token the EMPTY STRING there, the Harbor login
+      # throws, and since that login runs BEFORE the build the ECR push is
+      # lost with it.
+      HARBOR_ROBOT_USER: ${{ secrets.HARBOR_ROBOT_USER }}
+      HARBOR_ROBOT_TOKEN: ${{ secrets.HARBOR_ROBOT_TOKEN }}
 
   # 4. Summary
   rebuild-summary:
