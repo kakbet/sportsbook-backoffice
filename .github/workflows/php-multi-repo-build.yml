@@ -495,7 +495,7 @@ jobs:
           for ref in "$ECR_REF" "$HARBOR_REF"; do
             out="$(docker buildx imagetools inspect "$ref")"
             for q in "${want[@]}"; do
-              printf '%s\n' "$out" | grep -q "Platform:  *$q\$" \
+              grep -q "Platform:  *$q\$" <<< "$out" \
                 || { printf '%s\n' "$out"
                      echo "::error::$ref does not advertise $q"; exit 1; }
             done
