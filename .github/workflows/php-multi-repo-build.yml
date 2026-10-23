@@ -294,6 +294,21 @@ jobs:
           username: ${{ secrets.HARBOR_ROBOT_USER }}
           password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
 
+      - name: Tag fence self-test (scripts/ci/prepare-image-tags.sh)
+        # 🔑 The tag fence's own suite, run as a GATE rather than on request.
+        # This script is the one door that decides which image names a run may
+        # publish. Measured 2026-10-24: its assertions ran in exactly ONE of the 15
+        # repositories that carry it. Self-contained (`--selftest` builds its own git
+        # fixtures under `mktemp -d`): no credentials, no registry, no network.
+        # 🪴 Measured by mutation on this variant: clean "80 passed, 0 failed"
+        # (rc=0); a one-line change to the tag composition turns it non-zero. So this
+        # step IS the assertion and must never be wrapped in `|| true`.
+        # 🪴 working-directory: the orchestrator repo is checked out into `main/`,
+        # so the script is NOT at the job root -- without this line the step dies with
+        # `No such file or directory` (rc 127), i.e. red for the wrong reason.
+        working-directory: main
+        run: ./scripts/ci/prepare-image-tags.sh --selftest
+
       - name: Prepare Tags
         id: tags
         # 🪤 working-directory: bu workflow orkestrator depoyu `main/` ALT DIZINE
