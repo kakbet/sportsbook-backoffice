@@ -68,7 +68,9 @@ env:
   ECR_REPOSITORY: sb/sportsbook-backoffice
   PROJECT_NAME: "PHP Sportsbook"
   PROJECT_EMOJI: "🐘"
-  BASE_IMAGE: "827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm"
+  # 🪤 A `BASE_IMAGE:` env var used to sit here. It was DEAD -- declared and referenced
+  # nowhere (measured: `grep -n BASE_IMAGE` matched only its own declaration). The live
+  # base image is the `base_image:` input passed to php-multi-repo-build.yml below.
 
 permissions:
   contents: write
@@ -147,7 +149,9 @@ jobs:
       version: ${{ needs.version-management.outputs.new_version }}
       ecr_registry: "827604626727.dkr.ecr.eu-central-1.amazonaws.com"
       ecr_repository: "sb/sportsbook-backoffice"
-      base_image: "827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm"
+      # HARBOR since 2026-10-23 (see the input's default in php-multi-repo-build.yml for
+      # the measurement that every ECR tag of this image exists in Harbor at the same digest).
+      base_image: "registry.everva.com.tr/sb/sportsbook-php-fpm"
       # 🔴 CROSS-REPO DEPENDENCY: this image builds FROM sb/sportsbook-php-fpm.
       # That repo's own branch fence withholds `:latest` off main, so on a
       # branch run `latest` is still the OLD single-architecture base and the
