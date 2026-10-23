@@ -109,7 +109,8 @@ jobs:
       version: ${{ needs.validate-and-extract.outputs.version }}
       ecr_registry: "827604626727.dkr.ecr.eu-central-1.amazonaws.com"
       ecr_repository: "sb/sportsbook-backoffice"
-      base_image: "827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm"
+      # HARBOR since 2026-10-23: the ECR copy of this base image is being retired.
+      base_image: "registry.everva.com.tr/sb/sportsbook-php-fpm"
       php_version: ${{ github.event.inputs.php_version || '8.3' }}
       build_args: |
         {

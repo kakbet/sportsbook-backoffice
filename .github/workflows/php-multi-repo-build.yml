@@ -48,7 +48,16 @@ on:
       base_image:
         description: 'Base Docker image'
         required: false
-        default: '827604626727.dkr.ecr.eu-central-1.amazonaws.com/sb/sportsbook-php-fpm'
+        # HARBOR since 2026-10-23. The base used to be pulled from ECR; the ECR
+        # repository is being retired, and ITS writer cannot be cut while this build
+        # still pulls from there -- a frozen ECR `:latest` would make this build compile
+        # against a stale base SILENTLY. Measured before the switch: every one of the 11
+        # tags ECR holds for this image exists in Harbor under the SAME digest, `latest`
+        # and `1.0.7` both sha256:11c1526253cb5f1cae34f8d38c83ecac9a8b8c243f106d4a4eee8b11876d3444.
+        # The `Login to Harbor` step below already runs before the build, and the CI robot
+        # (robot$ci-push-kakbet4) has repository:push+pull in the `sb` project, so the
+        # FROM resolves with the credentials this job already has.
+        default: 'registry.everva.com.tr/sb/sportsbook-php-fpm'
         type: string
       php_version:
         description: 'PHP Version'
