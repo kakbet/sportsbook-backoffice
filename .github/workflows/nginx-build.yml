@@ -247,11 +247,11 @@ jobs:
         # a correct script. Reproduced locally with the ambient var (rc=1) and fixed by
         # scrubbing the inputs (rc=0, 80/87 assertions passed). The suite exports what
         # it needs itself, so nothing here has to be provided.
-        run: >-
-          env -u VERSION_VALUE -u VERSION_FILE -u VERSION_SOURCE -u TAG_STYLE
-              -u EXTRA_TAGS -u RELEASE_TAG_PREFIX -u INPUT_TAG
-              -u IMAGE_REGISTRY -u IMAGE_REPOSITORY
-              -u ECR_REGISTRY -u ECR_REPOSITORY -u TEST_MARKER -u DEFAULT_BRANCH
+        run: |
+          env -u VERSION_VALUE -u VERSION_FILE -u VERSION_SOURCE -u TAG_STYLE \
+              -u EXTRA_TAGS -u RELEASE_TAG_PREFIX -u INPUT_TAG \
+              -u IMAGE_REGISTRY -u IMAGE_REPOSITORY \
+              -u ECR_REGISTRY -u ECR_REPOSITORY -u TEST_MARKER -u DEFAULT_BRANCH \
               ./scripts/ci/prepare-image-tags.sh --selftest
 
       - name: Prepare Tags
