@@ -227,6 +227,33 @@ jobs:
           
           echo "labels=$LABELS" >> $GITHUB_OUTPUT
 
+      - name: Tag fence self-test (scripts/ci/prepare-image-tags.sh)
+        # 🔑 The tag fence's own suite, run as a GATE rather than on request.
+        # This script is the one door that decides which image names a run may
+        # publish. Measured 2026-10-24: its assertions ran in exactly ONE of the 15
+        # repositories that carry it. Self-contained (`--selftest` builds its own git
+        # fixtures under `mktemp -d`): no credentials, no registry, no network.
+        # 🪴 Measured by mutation on this variant: clean "80 passed, 0 failed"
+        # (rc=0); a one-line change to the tag composition turns it non-zero. So this
+        # step IS the assertion and must never be wrapped in `|| true`.
+        # 🪴 working-directory: the orchestrator repo is checked out into `main/`,
+        # so the script is NOT at the job root -- without this line the step dies with
+        # `No such file or directory` (rc 127), i.e. red for the wrong reason.
+        working-directory: main
+        # 🪴 Ambient env: the job or workflow may export the script's OWN inputs.
+        # Measured 2026-10-24: sportsbook-cronjob sets `VERSION_FILE: version.txt` at
+        # workflow level, and this step died with
+        # `line 45: version.txt: No such file or directory` (rc=1) -- a FAKE failure of
+        # a correct script. Reproduced locally with the ambient var (rc=1) and fixed by
+        # scrubbing the inputs (rc=0, 80/87 assertions passed). The suite exports what
+        # it needs itself, so nothing here has to be provided.
+        run: |
+          env -u VERSION_VALUE -u VERSION_FILE -u VERSION_SOURCE -u TAG_STYLE \
+              -u EXTRA_TAGS -u RELEASE_TAG_PREFIX -u INPUT_TAG \
+              -u IMAGE_REGISTRY -u IMAGE_REPOSITORY \
+              -u ECR_REGISTRY -u ECR_REPOSITORY -u TEST_MARKER -u DEFAULT_BRANCH \
+              ./scripts/ci/prepare-image-tags.sh --selftest
+
       - name: Prepare Tags
         id: tags
         # 🔴🔴 THIS IS THE HOLE THAT ACTUALLY FIRED. The caller invokes TWO build
