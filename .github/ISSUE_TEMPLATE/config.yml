@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Yeni iş hub'da açılır: kakbet/orca-shop"
+    url: https://github.com/kakbet/orca-shop/issues/new/choose
+    about: "Bu repoda yeni issue açılmaz. İşi orca-shop'ta İş formuyla aç. Rehber: https://github.com/kakbet/orca-shop/blob/main/CONTRIBUTING.md"
